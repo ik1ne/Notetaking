@@ -4,11 +4,6 @@ use windows::Win32::UI::Input::Pointer::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
 
-const PT_TOUCH: POINTER_INPUT_TYPE = POINTER_INPUT_TYPE(0x00000002);
-const PT_PEN: POINTER_INPUT_TYPE = POINTER_INPUT_TYPE(0x00000003);
-const PT_MOUSE: POINTER_INPUT_TYPE = POINTER_INPUT_TYPE(0x00000004);
-const PT_TOUCHPAD: POINTER_INPUT_TYPE = POINTER_INPUT_TYPE(0x00000005);
-
 // Main entry point
 fn main() -> Result<()> {
     unsafe {
