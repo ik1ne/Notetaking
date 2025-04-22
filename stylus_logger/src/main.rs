@@ -81,6 +81,10 @@ extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM
                     if GetPointerPenInfo(pointer_id, &mut pen_info).is_ok() {
                         let POINT { x, y } = pen_info.pointerInfo.ptPixelLocation; // screen coordinates
                         let pressure = pen_info.pressure;
+                        let pen_flags = pen_info.penFlags;
+                        let barrel_pressed = pen_flags & PEN_FLAG_BARREL == PEN_FLAG_BARREL;
+                        let eraser_in_use = pen_flags & PEN_FLAG_ERASER == PEN_FLAG_ERASER;
+                        let inverted = pen_flags & PEN_FLAG_INVERTED == PEN_FLAG_INVERTED;
                         let in_contact = pen_info.pointerInfo.pointerFlags & POINTER_FLAG_INCONTACT
                             != POINTER_FLAGS(0);
                         if msg == WM_POINTERENTER && !in_contact {
@@ -101,7 +105,10 @@ extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM
                                 }
                                 _ => "Pen", // for any other pointer message
                             };
-                            println!("{} at ({}, {})  pressure={}", action, x, y, pressure);
+                            println!(
+                                "{} at ({}, {})  pressure={}  barrel={} eraser={} inverted={}",
+                                action, x, y, pressure, barrel_pressed, eraser_in_use, inverted
+                            );
                         }
                     }
                 } else if pointer_type == PT_TOUCH {
