@@ -12,7 +12,7 @@ fn main() -> Result<()> {
 
         // Get HINSTANCE for this module (needed for registering window class)
         let hinstance = GetModuleHandleW(None)?;
-        debug_assert!(!hinstance.0.is_null());
+        debug_assert!(!hinstance.is_invalid());
 
         // Define a window class name (wide string)
         let class_name = w!("PointerInputWindow");
@@ -29,7 +29,7 @@ fn main() -> Result<()> {
         };
         // Register the window class
         let atom = RegisterClassW(&wnd_class);
-        assert!(atom != 0, "Failed to register window class");
+        assert_ne!(atom, 0, "Failed to register window class");
 
         // Create the window (WS_OVERLAPPEDWINDOW with WS_VISIBLE to show it immediately)
         let hwnd = CreateWindowExW(
