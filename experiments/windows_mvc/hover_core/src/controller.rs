@@ -1,10 +1,12 @@
 use crate::model::Model;
 
+/// Controller trait defines how input events modify the model.
 pub trait Controller {
     fn on_pointer_update(&mut self, x: f32, y: f32, in_contact: bool);
     fn on_pointer_leave(&mut self);
 }
 
+/// Concrete Controller tied to a Model.
 pub struct AppController<M: Model> {
     pub model: M,
 }

@@ -1,10 +1,12 @@
-#[derive(Debug, Clone, Copy)]
+/// Represents the state of the pointer: released, hovering, or pressing.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PointerState {
     Released,
     Hovered { x: f32, y: f32 },
     Pressed { x: f32, y: f32 },
 }
 
+/// Model trait defines the behavior of the app's state.
 pub trait Model {
     fn update_hover(&mut self, x: f32, y: f32);
     fn update_press(&mut self, x: f32, y: f32);
@@ -12,8 +14,15 @@ pub trait Model {
     fn pointer_state(&self) -> PointerState;
 }
 
+/// Concrete implementation of the Model.
 pub struct AppState {
     pointer_state: PointerState,
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl AppState {
