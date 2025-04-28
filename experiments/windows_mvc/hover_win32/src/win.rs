@@ -19,12 +19,12 @@ use windows_numerics::Vector2;
 
 // Shared global states
 thread_local! {
-    static CONTROLLER: RefCell<Option<AppController<AppState>>> = RefCell::new(None);
-    static D2D_CONTEXT: RefCell<Option<D2DContext>> = RefCell::new(None);
+    static CONTROLLER: RefCell<Option<AppController<AppState>>> = const { RefCell::new(None) };
+    static D2D_CONTEXT: RefCell<Option<D2DContext>> = const { RefCell::new(None) };
 }
 
 struct D2DContext {
-    factory: ID2D1Factory,
+    _factory: ID2D1Factory,
     render_target: ID2D1HwndRenderTarget,
     hover_brush: ID2D1SolidColorBrush,
     press_brush: ID2D1SolidColorBrush,
@@ -145,7 +145,7 @@ unsafe fn create_d2d_context(hwnd: HWND) -> Result<D2DContext> {
         )?;
 
         Ok(D2DContext {
-            factory,
+            _factory: factory,
             render_target,
             hover_brush,
             press_brush,
