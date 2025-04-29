@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::{ffi::OsStr, os::windows::ffi::OsStrExt, ptr::null_mut, thread};
 use windows::Win32::Foundation::COLORREF;
 use windows::Win32::Graphics::Gdi::{GetSysColorBrush, SYS_COLOR_INDEX, UpdateWindow};
-use windows::Win32::UI::Input::Pointer::EnableMouseInPointer;
+use windows::Win32::UI::Input::Pointer::{EnableMouseInPointer, GetPointerType};
 use windows::Win32::UI::WindowsAndMessaging::{PT_PEN, SetLayeredWindowAttributes};
 use windows::{
     Win32::{
