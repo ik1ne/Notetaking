@@ -1,145 +1,27 @@
 #define UNICODE
 #include <windows.h>
-#include <windowsx.h>
 #include <wrl.h>
-#include <iostream>
 #include <WebView2.h>
+
+#pragma comment(lib, "WebView2Loader.lib")
 
 using namespace Microsoft::WRL;
 
-HWND g_mainWindow = nullptr;
-ICoreWebView2Controller* g_webViewController = nullptr;
-ICoreWebView2* g_webView = nullptr;
+// Global pointers
+ComPtr<ICoreWebView2Controller> g_controller;
+ComPtr<ICoreWebView2> g_webView;
 
-LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
-
-// COM handler for controller creation
-class WebViewControllerCompletedHandler :
-    public RuntimeClass<RuntimeClassFlags<ClassicCom>, ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>
-{
-public:
-    STDMETHOD(Invoke)(HRESULT result, ICoreWebView2Controller* controller)
-    {
-        if (FAILED(result) || !controller)
-        {
-            MessageBoxW(nullptr, L"Failed to create WebView2 controller", L"Error", MB_ICONERROR);
-            return E_FAIL;
-        }
-
-        g_webViewController = controller;
-        g_webViewController->get_CoreWebView2(&g_webView);
-
-        // Resize to fit window
-        RECT bounds;
-        GetClientRect(g_mainWindow, &bounds);
-        g_webViewController->put_Bounds(bounds);
-
-        // Load HTML content
-        g_webView->Navigate(L"data:text/html,<html><body><h1>Hello World</h1></body></html>");
-        return S_OK;
-    }
-};
-
-// COM handler for environment creation
-class WebViewEnvironmentCompletedHandler :
-    public RuntimeClass<RuntimeClassFlags<ClassicCom>, ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>
-{
-public:
-    STDMETHOD(Invoke)(HRESULT result, ICoreWebView2Environment* env)
-    {
-        if (FAILED(result) || !env)
-        {
-            MessageBoxW(nullptr, L"Failed to create WebView2 environment", L"Error", MB_ICONERROR);
-            return E_FAIL;
-        }
-        env->CreateCoreWebView2Controller(g_mainWindow, Make<WebViewControllerCompletedHandler>().Get());
-        return S_OK;
-    }
-};
-
-int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow)
-{
-    // Register window class
-    const wchar_t CLASS_NAME[] = L"WebView2WindowClass";
-
-    WNDCLASSW wc = {};
-    wc.lpfnWndProc = WndProc;
-    wc.hInstance = hInstance;
-    wc.lpszClassName = CLASS_NAME;
-    RegisterClassW(&wc);
-
-    // Create main window
-    g_mainWindow = CreateWindowExW(
-        0, CLASS_NAME, L"WebView2 Stylus Filter",
-        WS_OVERLAPPEDWINDOW,
-        CW_USEDEFAULT, CW_USEDEFAULT, 800, 600,
-        nullptr, nullptr, hInstance, nullptr
-    );
-
-    if (!g_mainWindow)
-        return 1;
-
-    ShowWindow(g_mainWindow, nCmdShow);
-
-    // Initialize WebView2
-    HRESULT hr = CreateCoreWebView2EnvironmentWithOptions(
-        nullptr, nullptr, nullptr, Make<WebViewEnvironmentCompletedHandler>().Get());
-
-    if (FAILED(hr))
-    {
-        MessageBoxW(nullptr, L"WebView2 environment creation failed", L"Error", MB_ICONERROR);
-        return 1;
-    }
-
-    // Main message loop
-    MSG msg = {};
-    while (GetMessageW(&msg, nullptr, 0, 0))
-    {
-        TranslateMessage(&msg);
-        DispatchMessageW(&msg);
-    }
-
-    return 0;
-}
-
-LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg)
     {
-    case WM_POINTERDOWN:
-    case WM_POINTERUP:
-    case WM_POINTERUPDATE:
-        {
-            UINT32 pointerId = GET_POINTERID_WPARAM(wParam);
-            POINTER_INPUT_TYPE type;
-            if (GetPointerType(pointerId, &type))
-            {
-                if (type == PT_PEN)
-                {
-                    std::wcout << L"Stylus input detected\n";
-                }
-                else if (type == PT_MOUSE)
-                {
-                    std::wcout << L"Mouse input\n";
-                }
-                else if (type == PT_TOUCH)
-                {
-                    std::wcout << L"Touch input\n";
-                }
-                else
-                {
-                    std::wcout << L"Other pointer input\n";
-                }
-            }
-            break;
-        }
     case WM_SIZE:
         {
-            if (g_webViewController)
+            if (g_controller)
             {
                 RECT bounds;
                 GetClientRect(hwnd, &bounds);
-                g_webViewController->put_Bounds(bounds);
+                g_controller->put_Bounds(bounds);
             }
             break;
         }
@@ -147,5 +29,101 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         PostQuitMessage(0);
         return 0;
     }
-    return DefWindowProcW(hwnd, msg, wParam, lParam);
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int nCmdShow)
+{
+    CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+
+    // Register main window
+    const wchar_t MAIN_CLS[] = L"WebView2Main";
+    WNDCLASSW wc = {};
+    wc.lpfnWndProc = WndProc;
+    wc.hInstance = hInst;
+    wc.lpszClassName = MAIN_CLS;
+    RegisterClassW(&wc);
+
+    // Register overlay window class
+    const wchar_t OVER_CLS[] = L"Overlay";
+    WNDCLASSW wc2 = {};
+    wc2.lpfnWndProc = DefWindowProcW;
+    wc2.hInstance = hInst;
+    wc2.lpszClassName = OVER_CLS;
+    wc2.hbrBackground = CreateSolidBrush(RGB(0, 0, 0)); // black background
+    RegisterClassW(&wc2);
+
+    // Create main window
+    HWND hwnd = CreateWindowExW(
+        0, MAIN_CLS, L"WebView2 with Half Overlay",
+        WS_OVERLAPPEDWINDOW,
+        CW_USEDEFAULT, CW_USEDEFAULT, 800, 600,
+        nullptr, nullptr, hInst, nullptr);
+    ShowWindow(hwnd, nCmdShow);
+
+    // Create semi-transparent half-size overlay
+    RECT rc;
+    GetClientRect(hwnd, &rc);
+    int w = rc.right - rc.left;
+    int h = rc.bottom - rc.top;
+    HWND overlay = CreateWindowExW(
+        WS_EX_LAYERED | WS_EX_NOACTIVATE,
+        OVER_CLS, nullptr,
+        WS_POPUP | WS_VISIBLE,
+        rc.left + w / 4, rc.top + h / 4, // centered quarter offset
+        w / 2, h / 2,
+        hwnd, nullptr, hInst, nullptr);
+    // 50% opacity black overlay
+    SetLayeredWindowAttributes(overlay, 0, 128, LWA_ALPHA);
+    SetWindowPos(overlay, HWND_TOPMOST, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+
+    // HTML content
+    const wchar_t* html = LR"(
+        <!DOCTYPE html>
+        <html><body>
+          <h1>Hello World</h1>
+          <p>Overlay covers center half.</p>
+        </body></html>
+    )";
+
+    // Initialize WebView2
+    CreateCoreWebView2EnvironmentWithOptions(
+        nullptr, nullptr, nullptr,
+        Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
+            [hwnd, html](HRESULT envRes, ICoreWebView2Environment* env) -> HRESULT
+            {
+                if (SUCCEEDED(envRes) && env)
+                {
+                    env->CreateCoreWebView2Controller(
+                        hwnd,
+                        Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
+                            [hwnd, html](HRESULT ctrlRes, ICoreWebView2Controller* controller) -> HRESULT
+                            {
+                                if (SUCCEEDED(ctrlRes) && controller)
+                                {
+                                    g_controller = controller;
+                                    controller->get_CoreWebView2(&g_webView);
+                                    controller->put_IsVisible(TRUE);
+                                    RECT b;
+                                    GetClientRect(hwnd, &b);
+                                    controller->put_Bounds(b);
+                                    g_webView->NavigateToString(html);
+                                }
+                                return S_OK;
+                            }).Get());
+                }
+                return S_OK;
+            }).Get());
+
+    // Message loop
+    MSG msg;
+    while (GetMessageW(&msg, nullptr, 0, 0))
+    {
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
+
+    CoUninitialize();
+    return 0;
 }
