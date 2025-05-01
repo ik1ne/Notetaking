@@ -2,60 +2,204 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Monaco Editor Demo with Canvas Overlay</title>
+    <title>Monaco + Canvas Demo (Step 3 Update)</title>
     <style>
-        html, body, #wrapper, #editor-container {
+        html, body {
             margin: 0;
             padding: 0;
-            width: 100%;
             height: 100%;
             overflow: hidden;
         }
 
-        #wrapper {
+        #container {
             position: relative;
-        }
-
-        #editor-container {
-            position: absolute;
-            top: 0;
-            left: 0;
             width: 100%;
             height: 100%;
         }
 
-        #overlay {
+        #editor {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+        }
+
+        #ink-overlay {
             position: absolute;
             top: 0;
             left: 0;
             width: 100%;
             height: 100%;
             pointer-events: none;
-            z-index: 10;
+            touch-action: auto;
         }
     </style>
 </head>
 <body>
-<div id="wrapper">
-    <div id="editor-container"></div>
-    <canvas id="overlay"></canvas>
+<div id="container">
+    <div id="editor"></div>
+    <canvas id="ink-overlay"></canvas>
 </div>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js"></script>
+
+<!-- Monaco loader -->
+<script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.38.0/min/vs/loader.js"></script>
 <script>
-    require.config({paths: {'vs': 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.38.0/min/vs'}});
+    require.config({paths: {'vs': 'https://cdn.jsdelivr.net/npm/monaco-editor@0.38.0/min/vs'}});
     require(['vs/editor/editor.main'], function () {
-        const editor = monaco.editor.create(document.getElementById('editor-container'), {
-            value: Array.from({length: 100}, (_, i) => `// Line ${i + 1}`).join('\n') + '\n\nfunction hello() {\n  console.log("Hello, world!");\n  console.log("Hello, world!");\n  console.log("Hello, world!");\n  console.log("Hello, world!");\n  console.log("Hello, world!");\n}',
-            language: 'javascript',
-            theme: 'vs-light',
-            automaticLayout: true,
-            stickyScroll: {
-                enabled: true,
-                showLineNumbers: true,
-                maxLineCount: 2
+        // -- generate demo content with a long function for scrolling tests
+        const lines = ['function longFunction() {'];
+        for (let i = 0; i < 100; i++) {
+            lines.push(`  console.log("line ${i}");`);
+        }
+        lines.push('}');
+        lines.push('');
+        for (let i = 0; i < 50; i++) {
+            lines.push(`// filler line ${i}`);
+        }
+        lines.push('');
+        lines.push('function hello() {');
+        lines.push('  console.log("Hello, world!");');
+        lines.push('}');
+
+        window.editor = monaco.editor.create(
+            document.getElementById('editor'),
+            {
+                value: lines.join('\n'),
+                language: 'javascript',
+                automaticLayout: true,
+                stickyScroll: {
+                    enabled: true,
+                    showLineNumbers: true,
+                    maxLineCount: 2
+                }
             }
-        });
+        );
     });
+</script>
+
+<!-- Step 3 mode & input logic (updated) -->
+<script>
+    const canvas = document.getElementById('ink-overlay');
+    const ctx = canvas.getContext('2d');
+    let mode = 'pass';    // 'pass' | 'draw' | 'scroll'
+    let drawing = false;
+    let lastX, lastY;
+
+    function resizeCanvas() {
+        canvas.width = canvas.clientWidth;
+        canvas.height = canvas.clientHeight;
+    }
+
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    function setMode(m) {
+        mode = m;
+        switch (mode) {
+            case 'pass':
+                canvas.style.pointerEvents = 'none';
+                canvas.style.touchAction = 'auto';
+                break;
+            case 'draw':
+                canvas.style.pointerEvents = 'auto';
+                canvas.style.touchAction = 'none';
+                break;
+            case 'scroll':
+                canvas.style.pointerEvents = 'auto';
+                canvas.style.touchAction = 'none';
+                break;
+        }
+    }
+
+    document.addEventListener('keydown', e => {
+        if (!e.ctrlKey && !e.altKey && e.code.startsWith('Digit')) {
+            switch (e.code) {
+                case 'Digit1':
+                    setMode('pass');
+                    e.preventDefault();
+                    break;
+                case 'Digit2':
+                    setMode('draw');
+                    e.preventDefault();
+                    break;
+                case 'Digit3':
+                    setMode('scroll');
+                    e.preventDefault();
+                    break;
+            }
+        }
+    });
+
+    canvas.addEventListener('pointerdown', e => {
+        if (mode === 'draw' && e.pointerType === 'pen') {
+            // existing: pen draws
+            drawing = true;
+            [lastX, lastY] = [e.offsetX, e.offsetY];
+            canvas.setPointerCapture(e.pointerId);
+            e.preventDefault();
+        } else if (mode === 'draw' && e.pointerType === 'mouse') {
+            // NEW: in Draw mode, mouse-drag scrolls editor
+            drawing = true;
+            [lastX, lastY] = [e.clientX, e.clientY];
+            canvas.setPointerCapture(e.pointerId);
+            e.preventDefault();
+        } else if (mode === 'scroll' &&
+            (e.pointerType === 'touch' || e.button === 1)) {
+            // existing: scroll mode drag
+            drawing = true;
+            [lastX, lastY] = [e.clientX, e.clientY];
+            canvas.setPointerCapture(e.pointerId);
+            e.preventDefault();
+        }
+    });
+
+    canvas.addEventListener('pointermove', e => {
+        if (!drawing) return;
+
+        if (mode === 'draw' && e.pointerType === 'pen') {
+            // pen inking
+            const x = e.offsetX, y = e.offsetY;
+            ctx.lineJoin = 'round';
+            ctx.lineCap = 'round';
+            ctx.lineWidth = 2 + e.pressure * 8;
+            ctx.beginPath();
+            ctx.moveTo(lastX, lastY);
+            ctx.lineTo(x, y);
+            ctx.stroke();
+            [lastX, lastY] = [x, y];
+            e.preventDefault();
+        } else if (mode === 'draw' && e.pointerType === 'mouse') {
+            // NEW: scroll editor on mouse-drag in Draw mode
+            const dx = lastX - e.clientX;
+            const dy = lastY - e.clientY;
+            const ed = window.editor;
+            ed.setScrollTop(ed.getScrollTop() + dy);
+            ed.setScrollLeft(ed.getScrollLeft() + dx);
+            [lastX, lastY] = [e.clientX, e.clientY];
+            e.preventDefault();
+        } else if (mode === 'scroll') {
+            // existing scroll mode behavior
+            const dx = lastX - e.clientX;
+            const dy = lastY - e.clientY;
+            const ed = window.editor;
+            ed.setScrollTop(ed.getScrollTop() + dy);
+            ed.setScrollLeft(ed.getScrollLeft() + dx);
+            [lastX, lastY] = [e.clientX, e.clientY];
+            e.preventDefault();
+        }
+    });
+
+    canvas.addEventListener('pointerup', e => {
+        drawing = false;
+        canvas.releasePointerCapture(e.pointerId);
+    });
+    canvas.addEventListener('pointercancel', () => {
+        drawing = false;
+    });
+
+    // start in passthrough
+    setMode('pass');
 </script>
 </body>
 </html>
