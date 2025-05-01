@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Monaco + Canvas Demo (100k Strokes, Per-Stroke Render)</title>
+    <title>Monaco + Canvas Demo (100k Strokes, Optimized)</title>
     <style>
         html, body, #wrapper, #editor-container {
             margin: 0;
@@ -44,34 +44,61 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js"></script>
 <script>
+    // Stroke storage and offscreen buffer
     const strokes = [];
+    let offscreen, offctx;
+
     require.config({paths: {'vs': 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.38.0/min/vs'}});
     require(['vs/editor/editor.main'], function () {
-        // Populate editor with 1000 lines for testing scroll
+        // 1) Populate editor with 1000 lines for scroll testing
         const lines = ['function longFunction() {'];
         for (let i = 0; i < 1000; i++) lines.push(`  console.log("line ${i}");`);
         lines.push('}');
-        window.editor = monaco.editor.create(document.getElementById('editor-container'), {
-            value: lines.join('\n'), language: 'javascript', theme: 'vs-light', automaticLayout: true
-        });
+        window.editor = monaco.editor.create(
+            document.getElementById('editor-container'), {
+                value: lines.join('\n'),
+                language: 'javascript',
+                theme: 'vs-light',
+                automaticLayout: true
+            }
+        );
 
-        // Prepopulate 100k random strokes in document coords
+        // 2) Setup offscreen canvas matching full document size
         const docW = editor.getScrollWidth(), docH = editor.getScrollHeight();
+        offscreen = document.createElement('canvas');
+        offscreen.width = docW;
+        offscreen.height = docH;
+        offctx = offscreen.getContext('2d');
+        offctx.lineCap = 'round';
+        offctx.lineJoin = 'round';
+
+        // 3) Prepopulate 100k random strokes onto offscreen
         for (let i = 0; i < 100000; i++) {
             const stroke = [];
-            let x = Math.random() * docW, y = Math.random() * docH;
+            let x = Math.random() * docW;
+            let y = Math.random() * docH;
             for (let j = 0; j < 5; j++) {
-                stroke.push({x, y, pressure: Math.random()});
-                // random walk
+                const p = {x, y, pressure: Math.random()};
+                stroke.push(p);
+                if (j > 0) {
+                    const prev = stroke[j - 1];
+                    offctx.lineWidth = 1 + p.pressure * 4;
+                    offctx.beginPath();
+                    offctx.moveTo(prev.x, prev.y);
+                    offctx.lineTo(p.x, p.y);
+                    offctx.stroke();
+                }
                 x += (Math.random() - 0.5) * 200;
                 y += (Math.random() - 0.5) * 50;
             }
             strokes.push(stroke);
         }
 
-        // hook scroll and resize to render
+        // 4) Hook scroll and resize to re-render viewport
         editor.onDidScrollChange(render);
         window.addEventListener('resize', resizeCanvas);
+
+        // 5) Initial sizing and mode
         resizeCanvas();
         setMode('pass');
     });
@@ -80,38 +107,31 @@
 <script>
     const canvas = document.getElementById('overlay');
     const ctx = canvas.getContext('2d');
-    let mode = 'pass', drawing = false, currentStroke = null, last = {x: 0, y: 0};
+    let mode = 'pass', drawing = false, currentStroke = null, lastPos = {x: 0, y: 0};
 
+    // Resize the canvas to fit the container
     function resizeCanvas() {
         canvas.width = canvas.clientWidth;
         canvas.height = canvas.clientHeight;
         render();
     }
 
+    // Draw only the visible region from the offscreen buffer
     function render() {
         const sl = editor.getScrollLeft(), st = editor.getScrollTop();
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        // light opacity so editor text remains visible
-        ctx.globalAlpha = 0.2;
-        ctx.strokeStyle = 'rgba(0,0,0,0.5)';
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-        for (const stroke of strokes) {
-            for (let k = 1; k < stroke.length; k++) {
-                const p0 = stroke[k - 1], p1 = stroke[k];
-                const x0 = p0.x - sl, y0 = p0.y - st;
-                const x1 = p1.x - sl, y1 = p1.y - st;
-                ctx.lineWidth = 1 + p1.pressure * 4;
-                ctx.beginPath();
-                ctx.moveTo(x0, y0);
-                ctx.lineTo(x1, y1);
-                ctx.stroke();
-            }
-        }
+        ctx.globalAlpha = 0.2; // semi-transparent strokes
+        ctx.drawImage(
+            offscreen,
+            sl, st,
+            canvas.width, canvas.height,
+            0, 0,
+            canvas.width, canvas.height
+        );
+        ctx.globalAlpha = 1;
     }
 
+    // Mode toggling: pass-through vs capture
     function setMode(m) {
         mode = m;
         if (mode === 'pass') {
@@ -123,8 +143,9 @@
         }
     }
 
+    // Keyboard shortcuts for modes
     document.addEventListener('keydown', e => {
-        if (e.code.startsWith('Digit') && !e.ctrlKey && !e.altKey) {
+        if (!e.ctrlKey && !e.altKey && e.code.startsWith('Digit')) {
             switch (e.code) {
                 case 'Digit1':
                     setMode('pass');
@@ -140,18 +161,21 @@
         }
     });
 
+    // Handle pointer events for new strokes or scrolling
     canvas.addEventListener('pointerdown', e => {
         const sl = editor.getScrollLeft(), st = editor.getScrollTop();
         if (mode === 'draw' && e.pointerType === 'pen') {
             currentStroke = [];
             strokes.push(currentStroke);
-            currentStroke.push({x: e.clientX + sl, y: e.clientY + st, pressure: e.pressure});
+            const p = {x: e.clientX + sl, y: e.clientY + st, pressure: e.pressure};
+            currentStroke.push(p);
             drawing = true;
             canvas.setPointerCapture(e.pointerId);
             e.preventDefault();
-        } else if ((mode === 'draw' && e.pointerType === 'mouse') || (mode === 'scroll' && (e.pointerType === 'touch' || e.button === 1))) {
+        } else if ((mode === 'draw' && e.pointerType === 'mouse') ||
+            (mode === 'scroll' && (e.pointerType === 'touch' || e.button === 1))) {
             drawing = true;
-            last = {x: e.clientX, y: e.clientY};
+            lastPos = {x: e.clientX, y: e.clientY};
             canvas.setPointerCapture(e.pointerId);
             e.preventDefault();
         }
@@ -161,20 +185,28 @@
         if (!drawing) return;
         const sl = editor.getScrollLeft(), st = editor.getScrollTop();
         if (mode === 'draw' && e.pointerType === 'pen') {
-            currentStroke.push({x: e.clientX + sl, y: e.clientY + st, pressure: e.pressure});
+            const p = {x: e.clientX + sl, y: e.clientY + st, pressure: e.pressure};
+            currentStroke.push(p);
+            const prev = currentStroke[currentStroke.length - 2];
+            // draw new segment directly to offscreen
+            offctx.lineWidth = 1 + p.pressure * 4;
+            offctx.beginPath();
+            offctx.moveTo(prev.x, prev.y);
+            offctx.lineTo(p.x, p.y);
+            offctx.stroke();
             render();
             e.preventDefault();
         } else if (mode === 'draw' && e.pointerType === 'mouse') {
-            const dx = last.x - e.clientX, dy = last.y - e.clientY;
+            const dx = lastPos.x - e.clientX, dy = lastPos.y - e.clientY;
             editor.setScrollTop(editor.getScrollTop() + dy);
             editor.setScrollLeft(editor.getScrollLeft() + dx);
-            last = {x: e.clientX, y: e.clientY};
+            lastPos = {x: e.clientX, y: e.clientY};
             e.preventDefault();
         } else if (mode === 'scroll') {
-            const dx = last.x - e.clientX, dy = last.y - e.clientY;
+            const dx = lastPos.x - e.clientX, dy = lastPos.y - e.clientY;
             editor.setScrollTop(editor.getScrollTop() + dy);
             editor.setScrollLeft(editor.getScrollLeft() + dx);
-            last = {x: e.clientX, y: e.clientY};
+            lastPos = {x: e.clientX, y: e.clientY};
             e.preventDefault();
         }
     });
