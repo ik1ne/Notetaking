@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Monaco + Canvas Demo with 1000 Prepopulated Strokes</title>
+    <title>Monaco + Canvas Demo (Optimized)</title>
     <style>
         html, body, #wrapper, #editor-container {
             margin: 0;
@@ -45,6 +45,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js"></script>
 <script>
     let strokes = [];
+    let offscreen, offctx;
 
     require.config({paths: {'vs': 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.38.0/min/vs'}});
     require(['vs/editor/editor.main'], function () {
@@ -57,69 +58,77 @@
 
         window.editor = monaco.editor.create(
             document.getElementById('editor-container'), {
-                value: lines.join('\n'),
-                language: 'javascript',
-                theme: 'vs-light',
-                automaticLayout: true
+                value: lines.join('\n'), language: 'javascript', theme: 'vs-light', automaticLayout: true
             }
         );
 
-        // Prepopulate 1000 random strokes in document coords
+        // Prepare offscreen canvas matching document size
+        const docWidth = editor.getScrollWidth();
+        const docHeight = editor.getScrollHeight();
+        offscreen = document.createElement('canvas');
+        offscreen.width = docWidth;
+        offscreen.height = docHeight;
+        offctx = offscreen.getContext('2d');
+        offctx.lineCap = 'round';
+        offctx.lineJoin = 'round';
+
+        // Prepopulate 1000 random strokes in document coords and draw once offscreen
         for (let i = 0; i < 1000; i++) {
             const stroke = [];
-            const baseX = Math.random() * editor.getScrollWidth();
-            const baseY = Math.random() * editor.getScrollHeight();
+            const baseX = Math.random() * docWidth;
+            const baseY = Math.random() * docHeight;
             let x = baseX, y = baseY;
             for (let j = 0; j < 10; j++) {
-                stroke.push({x, y, pressure: Math.random()});
+                const p = {x, y, pressure: Math.random()};
+                stroke.push(p);
+                // draw segment on offscreen
+                if (j > 0) {
+                    const prev = stroke[j - 1];
+                    offctx.lineWidth = 2 + p.pressure * 8;
+                    offctx.beginPath();
+                    offctx.moveTo(prev.x, prev.y);
+                    offctx.lineTo(p.x, p.y);
+                    offctx.stroke();
+                }
                 x += (Math.random() - 0.5) * 100;
                 y += (Math.random() - 0.5) * 40;
             }
             strokes.push(stroke);
         }
 
-        // Sync render on scroll
-        editor.onDidScrollChange(() => render());
-
-        // Resize canvas and initial render
+        // Hook scroll to redraw viewport from offscreen
+        editor.onDidScrollChange(render);
         window.addEventListener('resize', resizeCanvas);
         resizeCanvas();
-        render();
         setMode('pass');
     });
+</script>
 
+<script>
     const canvas = document.getElementById('overlay');
     const ctx = canvas.getContext('2d');
-    let mode = 'pass';
-    let drawing = false;
-    let currentStroke = null;
-    let lastPos = {x: 0, y: 0};
+    let mode = 'pass', drawing = false, currentStroke = null, lastPos = {x: 0, y: 0};
 
     function resizeCanvas() {
         canvas.width = canvas.clientWidth;
         canvas.height = canvas.clientHeight;
-        ctx.strokeStyle = '#000';
         render();
     }
 
     function render() {
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
         const sl = editor.getScrollLeft();
         const st = editor.getScrollTop();
-        for (const stroke of strokes) {
-            for (let i = 1; i < stroke.length; i++) {
-                const p0 = stroke[i - 1], p1 = stroke[i];
-                const x0 = p0.x - sl, y0 = p0.y - st;
-                const x1 = p1.x - sl, y1 = p1.y - st;
-                ctx.lineCap = 'round';
-                ctx.lineJoin = 'round';
-                ctx.lineWidth = 2 + p1.pressure * 8;
-                ctx.beginPath();
-                ctx.moveTo(x0, y0);
-                ctx.lineTo(x1, y1);
-                ctx.stroke();
-            }
-        }
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        // draw only the visible region from offscreen
+        ctx.drawImage(
+            offscreen,        // source
+            sl, st,           // source x,y
+            canvas.width,     // source w
+            canvas.height,    // source h
+            0, 0,             // dest x,y
+            canvas.width,     // dest w
+            canvas.height     // dest h
+        );
     }
 
     function setMode(m) {
@@ -155,7 +164,8 @@
         if (mode === 'draw' && e.pointerType === 'pen') {
             currentStroke = [];
             strokes.push(currentStroke);
-            currentStroke.push({x: e.clientX + sl, y: e.clientY + st, pressure: e.pressure});
+            const p = {x: e.clientX + sl, y: e.clientY + st, pressure: e.pressure};
+            currentStroke.push(p);
             drawing = true;
             canvas.setPointerCapture(e.pointerId);
             e.preventDefault();
@@ -172,7 +182,15 @@
         if (!drawing) return;
         const sl = editor.getScrollLeft(), st = editor.getScrollTop();
         if (mode === 'draw' && e.pointerType === 'pen') {
-            currentStroke.push({x: e.clientX + sl, y: e.clientY + st, pressure: e.pressure});
+            const p = {x: e.clientX + sl, y: e.clientY + st, pressure: e.pressure};
+            currentStroke.push(p);
+            // draw new segment on offscreen and viewport
+            const prev = currentStroke[currentStroke.length - 2];
+            offctx.lineWidth = 2 + p.pressure * 8;
+            offctx.beginPath();
+            offctx.moveTo(prev.x, prev.y);
+            offctx.lineTo(p.x, p.y);
+            offctx.stroke();
             render();
             e.preventDefault();
         } else if (mode === 'draw' && e.pointerType === 'mouse') {
