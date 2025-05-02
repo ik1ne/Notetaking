@@ -53,13 +53,31 @@ void InitializeWebView(HWND hwnd)
             }).Get());
 }
 
-// Reposition/rescale both WebView2 control and overlay child
+// Reposition/rescale both WebView2 control and overlay window
 void ResizeChildren(const RECT& rc)
 {
+    // Resize the WebView2 control to fill client area
     if (g_controller)
     {
         g_controller->put_Bounds(rc);
     }
+    // Position and size the top-level overlay to exactly match the main window's client area
+    if (g_overlayHwnd && g_mainHwnd)
+    {
+        // Convert client origin (0,0) to screen coordinates
+        POINT origin{rc.left, rc.top};
+        ClientToScreen(g_mainHwnd, &origin);
+        SetWindowPos(
+            g_overlayHwnd,
+            HWND_TOPMOST,
+            origin.x,
+            origin.y,
+            rc.right - rc.left,
+            rc.bottom - rc.top,
+            SWP_NOACTIVATE
+        );
+    }
+
     if (g_overlayHwnd)
     {
         // As a child window, position at 0,0 of parent client
@@ -235,8 +253,13 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow)
         nullptr // no additional params
     );
     // Make black transparent so only strokes show
-    SetLayeredWindowAttributes(g_overlayHwnd, RGB(0, 0, 0), 0, LWA_COLORKEY);
+    SetLayeredWindowAttributes(g_overlayHwnd, RGB(1, 0, 0), 01, LWA_COLORKEY);
     ShowWindow(g_overlayHwnd, nCmdShow);
+    // Ensure overlay receives pen and touch input
+    RegisterPointerInputTarget(g_overlayHwnd, PT_PEN);
+    RegisterPointerInputTarget(g_overlayHwnd, PT_TOUCH);
+    RegisterPointerInputTarget(g_overlayHwnd, PT_MOUSE);
+
 
     // Overlay initially placed and sized; use ResizeChildren for future WM_SIZE/WM_MOVE
     ResizeChildren(rc);
