@@ -1,197 +1,225 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <title>Monaco Editor Stylus Drawing Demo</title>
-    <script src="https://unpkg.com/monaco-editor@latest/min/vs/loader.js"></script>
+    <meta charset="utf-8">
+    <title>Monaco Editor with Stylus Canvas Overlay (Fixed)</title>
     <style>
-        html, body {
+        html, body, #container {
             margin: 0;
             padding: 0;
             height: 100%;
         }
 
         #container {
-            width: 800px;
-            height: 600px;
             position: relative;
-            border: 1px solid #ccc;
         }
 
-        #editor {
+        #editorContainer {
             width: 100%;
             height: 100%;
         }
 
-        #overlay {
+        #overlayCanvas {
             position: absolute;
             top: 0;
             left: 0;
-            touch-action: none;
+            width: 100%;
+            height: 100%;
+            /* pointer-events toggled in script */
+        }
+
+        #modeSelector {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            z-index: 2;
+            background: rgba(255, 255, 255, 0.8);
+            padding: 5px;
         }
     </style>
 </head>
 <body>
 <div id="container">
-    <div id="editor"></div>
-    <canvas id="overlay"></canvas>
+    <div id="editorContainer"></div>
+    <canvas id="overlayCanvas"></canvas>
+    <div id="modeSelector">
+        Mode:
+        <button id="passBtn">Pass</button>
+        <button id="drawBtn">Draw</button>
+        <button id="scrollBtn">Scroll</button>
+    </div>
 </div>
+
+<link rel="stylesheet"
+      href="https://unpkg.com/monaco-editor@0.39.0/min/vs/editor/editor.main.css">
+<script src="https://unpkg.com/monaco-editor@0.39.0/min/vs/loader.js"></script>
 <script>
-    // Configure Monaco loader
-    require.config({paths: {'vs': 'https://unpkg.com/monaco-editor@latest/min/vs'}});
+    require.config({paths: {'vs': 'https://unpkg.com/monaco-editor@0.39.0/min/vs'}});
     require(['vs/editor/editor.main'], function () {
-        // Create Monaco editor with 1000 lines of dummy code
-        const editor = monaco.editor.create(document.getElementById('editor'), {
-            value: Array.from({length: 1000}, (_, i) => '// Line ' + (i + 1)).join("\n"),
-            language: 'javascript',
-        });
+        // Create the Monaco editor in #editorContainer.
+        const editor = monaco.editor.create(
+            document.getElementById('editorContainer'),
+            {
+                value: Array(1000).fill('function foo() { console.log("Hello World"); }').join('\n'),
+                language: 'javascript',
+                theme: 'vs-light',
+                automaticLayout: true
+            }
+        );
 
-        const container = document.getElementById('container');
-        const canvas = document.getElementById('overlay');
+        // Overlay setup
+        const canvas = document.getElementById('overlayCanvas');
         const ctx = canvas.getContext('2d');
-        let strokes = [];
-        let currentStroke = null;
-        let drawing = false;
-        let drawRequested = false;
-        // Track scroll offsets
-        let scrollTop = editor.getScrollTop();
-        let scrollLeft = editor.getScrollLeft();
+        const dpr = window.devicePixelRatio || 1;
 
-        // Resize canvas to match container size
-        function resizeCanvas() {
-            canvas.width = container.clientWidth;
-            canvas.height = container.clientHeight;
+        //
+        // --- MOVE THESE BEFORE ANY scheduleRedraw() CALLS ---
+        //
+        // Flag & scheduler for rAF-based redraw
+        let redrawScheduled = false;
+
+        function scheduleRedraw() {
+            if (redrawScheduled) return;
+            redrawScheduled = true;
+            requestAnimationFrame(() => {
+                redrawScheduled = false;
+                redrawCanvas();
+            });
         }
 
+        // Stroke storage
+        const strokes = [];
+        let currentStroke = null;
+        let isDrawing = false;
+        let scrollStartY, scrollStartX, origScrollTop, origScrollLeft, pointerId;
+        let mode = 'pass'; // 'pass' | 'draw' | 'scroll'
+
+        // Helpers
+        function computeBBox(points) {
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            for (const p of points) {
+                if (p.x < minX) minX = p.x;
+                if (p.y < minY) minY = p.y;
+                if (p.x > maxX) maxX = p.x;
+                if (p.y > maxY) maxY = p.y;
+            }
+            return {minX, minY, maxX, maxY};
+        }
+
+        // Resize canvas to match editor container
+        function resizeCanvas() {
+            const rect = editor.getDomNode().getBoundingClientRect();
+            canvas.style.width = rect.width + 'px';
+            canvas.style.height = rect.height + 'px';
+            canvas.width = rect.width * dpr;
+            canvas.height = rect.height * dpr;
+            ctx.scale(dpr, dpr);
+            scheduleRedraw();
+        }
+
+        window.addEventListener('resize', resizeCanvas);
         resizeCanvas();
-        window.addEventListener('resize', () => {
-            resizeCanvas();
-            scheduleDraw();
+
+        // Mode buttons
+        document.getElementById('passBtn').onclick = () => setMode('pass');
+        document.getElementById('drawBtn').onclick = () => setMode('draw');
+        document.getElementById('scrollBtn').onclick = () => setMode('scroll');
+
+        function setMode(m) {
+            mode = m;
+            canvas.style.pointerEvents = m === 'pass' ? 'none' : 'auto';
+        }
+
+        setMode('pass');
+
+        // Pointer events
+        canvas.addEventListener('pointerdown', e => {
+            if (mode === 'draw' && e.pointerType === 'pen') {
+                e.preventDefault();
+                pointerId = e.pointerId;
+                isDrawing = true;
+                const rect = canvas.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top + editor.getScrollTop();
+                currentStroke = {points: [{x, y, p: e.pressure}]};
+                ctx.beginPath();
+                ctx.moveTo(x, y - editor.getScrollTop());
+            } else if (mode === 'scroll') {
+                e.preventDefault();
+                pointerId = e.pointerId;
+                isDrawing = true;
+                scrollStartY = e.clientY;
+                scrollStartX = e.clientX;
+                origScrollTop = editor.getScrollTop();
+                origScrollLeft = editor.getScrollLeft();
+            }
         });
 
-        // Schedule a redraw on the next animation frame
-        function scheduleDraw() {
-            if (!drawRequested) {
-                drawRequested = true;
-                requestAnimationFrame(() => {
-                    drawRequested = false;
-                    draw();
-                });
+        canvas.addEventListener('pointermove', e => {
+            if (!isDrawing || e.pointerId !== pointerId) return;
+            const rect = canvas.getBoundingClientRect();
+            if (mode === 'draw') {
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top + editor.getScrollTop();
+                currentStroke.points.push({x, y, p: e.pressure});
+                ctx.lineWidth = 2 * e.pressure;
+                ctx.lineCap = 'round';
+                ctx.lineTo(x, y - editor.getScrollTop());
+                ctx.stroke();
+            } else if (mode === 'scroll') {
+                const dy = e.clientY - scrollStartY;
+                const dx = e.clientX - scrollStartX;
+                editor.setScrollTop(origScrollTop - dy);
+                editor.setScrollLeft(origScrollLeft - dx);
+                scheduleRedraw();
             }
-        }
+        });
 
-        // Draw visible strokes
-        function draw() {
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            ctx.save();
-            ctx.translate(-scrollLeft, -scrollTop);
-            ctx.strokeStyle = 'black';
-            ctx.lineJoin = 'round';
-            ctx.lineCap = 'round';
-            const viewX1 = scrollLeft;
-            const viewY1 = scrollTop;
-            const viewX2 = scrollLeft + canvas.width;
-            const viewY2 = scrollTop + canvas.height;
-            // Draw completed strokes
-            for (const stroke of strokes) {
-                if (stroke.maxX < viewX1 || stroke.minX > viewX2 ||
-                    stroke.maxY < viewY1 || stroke.minY > viewY2) {
-                    continue;
-                }
-                ctx.lineWidth = stroke.width;
-                ctx.stroke(stroke.path);
+        canvas.addEventListener('pointerup', e => {
+            if (!isDrawing || e.pointerId !== pointerId) return;
+            isDrawing = false;
+            pointerId = null;
+            if (mode === 'draw' && currentStroke) {
+                currentStroke.bbox = computeBBox(currentStroke.points);
+                strokes.push(currentStroke);
+                currentStroke = null;
             }
-            // Draw current stroke
-            if (currentStroke) {
-                const pts = currentStroke.points;
-                if (pts.length > 0) {
-                    ctx.lineWidth = currentStroke.width;
-                    ctx.beginPath();
-                    ctx.moveTo(pts[0].x, pts[0].y);
-                    for (let i = 1; i < pts.length; i++) {
-                        ctx.lineTo(pts[i].x, pts[i].y);
+        });
+        canvas.addEventListener('pointercancel', e => {
+            canvas.dispatchEvent(new PointerEvent('pointerup', e));
+        });
+
+        // Redraw only visible strokes
+        function redrawCanvas() {
+            const rect = canvas.getBoundingClientRect();
+            ctx.clearRect(0, 0, rect.width, rect.height);
+            const viewTop = editor.getScrollTop();
+            const viewBottom = viewTop + rect.height;
+            ctx.save();
+            ctx.translate(0, -viewTop);
+            ctx.lineCap = 'round';
+            for (const stroke of strokes) {
+                const bb = stroke.bbox;
+                if (!bb || bb.maxY < viewTop || bb.minY > viewBottom) continue;
+                ctx.beginPath();
+                for (let i = 0; i < stroke.points.length; i++) {
+                    const pt = stroke.points[i];
+                    if (i === 0) ctx.moveTo(pt.x, pt.y);
+                    else {
+                        ctx.lineWidth = 2 * pt.p;
+                        ctx.lineTo(pt.x, pt.y);
                     }
-                    ctx.stroke();
                 }
+                ctx.stroke();
             }
             ctx.restore();
         }
 
-        // Add a point to the current stroke and update bounding box
-        function addPointToStroke(x, y, pressure) {
-            currentStroke.points.push({x, y});
-            currentStroke.totalPressure += pressure;
-            if (x < currentStroke.minX) currentStroke.minX = x;
-            if (x > currentStroke.maxX) currentStroke.maxX = x;
-            if (y < currentStroke.minY) currentStroke.minY = y;
-            if (y > currentStroke.maxY) currentStroke.maxY = y;
-        }
-
-        // Handle stylus pointer down
-        canvas.addEventListener('pointerdown', (e) => {
-            if (e.pointerType !== 'pen') return;
-            drawing = true;
-            canvas.setPointerCapture(e.pointerId);
-            currentStroke = {
-                points: [],
-                minX: Infinity, minY: Infinity,
-                maxX: -Infinity, maxY: -Infinity,
-                totalPressure: 0,
-                width: 1
-            };
-            const x = e.offsetX + scrollLeft;
-            const y = e.offsetY + scrollTop;
-            addPointToStroke(x, y, e.pressure);
-            scheduleDraw();
-        });
-
-        // Handle stylus pointer move
-        canvas.addEventListener('pointermove', (e) => {
-            if (!drawing || e.pointerType !== 'pen') return;
-            const x = e.offsetX + scrollLeft;
-            const y = e.offsetY + scrollTop;
-            addPointToStroke(x, y, e.pressure);
-            scheduleDraw();
-        });
-
-        // End the stroke on pointer up or cancel
-        function endStroke(e) {
-            if (!drawing || e.pointerType !== 'pen') return;
-            drawing = false;
-            canvas.releasePointerCapture(e.pointerId);
-            const x = e.offsetX + scrollLeft;
-            const y = e.offsetY + scrollTop;
-            addPointToStroke(x, y, e.pressure);
-            // Calculate stroke width from average pressure
-            const avgPressure = currentStroke.totalPressure / currentStroke.points.length;
-            currentStroke.width = Math.max(1, avgPressure * 10);
-            // Build Path2D for the stroke
-            const path = new Path2D();
-            const pts = currentStroke.points;
-            if (pts.length > 0) {
-                path.moveTo(pts[0].x, pts[0].y);
-                for (let i = 1; i < pts.length; i++) {
-                    path.lineTo(pts[i].x, pts[i].y);
-                }
-            }
-            currentStroke.path = path;
-            strokes.push(currentStroke);
-            currentStroke = null;
-            scheduleDraw();
-        }
-
-        canvas.addEventListener('pointerup', endStroke);
-        canvas.addEventListener('pointercancel', endStroke);
-
-        // Redraw when the editor is scrolled
-        editor.onDidScrollChange((e) => {
-            scrollTop = e.scrollTop;
-            scrollLeft = e.scrollLeft;
-            scheduleDraw();
-        });
+        // Also redraw when the editor scrolls by other means
+        editor.onDidScrollChange(() => scheduleRedraw());
 
         // Initial draw
-        draw();
+        scheduleRedraw();
     });
 </script>
 </body>
