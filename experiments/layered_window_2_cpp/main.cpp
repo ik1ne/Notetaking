@@ -3,10 +3,12 @@
 #include <windowsx.h>
 #include <wrl.h>
 #include <WebView2.h>
+#include <shellscalingapi.h>  // for DPI awareness
 #include <vector>
 #include <mutex>
 #include <stdio.h>
 
+#pragma comment(lib, "Shcore.lib")
 using namespace Microsoft::WRL;
 
 // Globals
@@ -94,7 +96,7 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     return 0;
 }
 
-// Overlay window procedure: pen drawing only
+// Overlay window procedure: pen & mouse drawing
 LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     if (msg == WM_POINTERDOWN || msg == WM_POINTERUPDATE || msg == WM_POINTERUP)
@@ -103,23 +105,51 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         POINTER_INPUT_TYPE type;
         if (SUCCEEDED(GetPointerType(pid, &type)) && type == PT_PEN)
         {
-            POINT pt{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
-            std::lock_guard<std::mutex> lock(g_mutex);
-            if (msg == WM_POINTERDOWN)
+            POINTER_INFO pi;
+            if (GetPointerInfo(pid, &pi))
             {
-                g_strokePoints.clear();
-                g_strokePoints.push_back(pt);
-                SetCapture(hwnd);
+                POINT pt = pi.ptPixelLocation;
+                ScreenToClient(hwnd, &pt);
+                std::lock_guard<std::mutex> lock(g_mutex);
+                if (msg == WM_POINTERDOWN)
+                {
+                    g_strokePoints.clear();
+                    g_strokePoints.push_back(pt);
+                    SetCapture(hwnd);
+                }
+                else if (msg == WM_POINTERUPDATE)
+                {
+                    g_strokePoints.push_back(pt);
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                }
+                else if (msg == WM_POINTERUP)
+                {
+                    ReleaseCapture();
+                }
             }
-            else if (msg == WM_POINTERUPDATE)
-            {
-                g_strokePoints.push_back(pt);
-                InvalidateRect(hwnd, nullptr, FALSE);
-            }
-            else if (msg == WM_POINTERUP)
-            {
-                ReleaseCapture();
-            }
+        }
+        return 0;
+    }
+    // Fallback to mouse events
+    if (msg == WM_LBUTTONDOWN || msg == WM_MOUSEMOVE || msg == WM_LBUTTONUP)
+    {
+        bool btnDown = (wParam & MK_LBUTTON) != 0;
+        POINT pt{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+        std::lock_guard<std::mutex> lock(g_mutex);
+        if (msg == WM_LBUTTONDOWN)
+        {
+            g_strokePoints.clear();
+            g_strokePoints.push_back(pt);
+            SetCapture(hwnd);
+        }
+        else if (msg == WM_MOUSEMOVE && btnDown && GetCapture() == hwnd)
+        {
+            g_strokePoints.push_back(pt);
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
+        else if (msg == WM_LBUTTONUP)
+        {
+            ReleaseCapture();
         }
         return 0;
     }
@@ -150,6 +180,8 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 // Entry point
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow)
 {
+    // Enable per-monitor DPI awareness for correct coordinate mapping
+    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     EnableMouseInPointer(TRUE);
 
@@ -184,14 +216,14 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow)
     // Initialize WebView2
     InitializeWebView(g_mainHwnd);
 
-    // Create overlay (receives pen input)
+    // Create overlay
     g_overlayHwnd = CreateWindowExW(
         WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
         L"OverlayWindowClass",
         nullptr, WS_POPUP,
         0, 0, 0, 0,
         nullptr, nullptr, hInstance, nullptr);
-    SetLayeredWindowAttributes(g_overlayHwnd, 0, 1, LWA_ALPHA);
+    SetLayeredWindowAttributes(g_overlayHwnd, 0, 128, LWA_ALPHA);
     ShowWindow(g_overlayHwnd, nCmdShow);
 
     // Initial sizing
