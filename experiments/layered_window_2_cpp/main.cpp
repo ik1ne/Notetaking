@@ -1,27 +1,100 @@
 #include <windows.h>
 #include <wrl.h>
 #include <WebView2.h>
+#include <windowsx.h>
 
 using namespace Microsoft::WRL;
 
 #define ID_OVERLAY 1001
 
+// Global handles and drawing state
+static HWND g_mainHwnd = nullptr;
+static HWND g_overlayHwnd = nullptr;
+static ComPtr<ICoreWebView2Controller> g_webViewController;
+static bool g_isDrawing = false;
+static POINT g_lastPoint = {};
+
+// Resize overlay and WebView2
+void ResizeChildren(RECT const& rc)
+{
+    if (g_overlayHwnd)
+    {
+        SetWindowPos(g_overlayHwnd, HWND_TOPMOST,
+                     rc.left, rc.top,
+                     rc.right - rc.left,
+                     rc.bottom - rc.top,
+                     SWP_NOACTIVATE);
+    }
+    if (g_webViewController)
+    {
+        g_webViewController->put_Bounds(rc);
+    }
+}
+
 // Main window procedure
 LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
-    if (msg == WM_DESTROY)
+    switch (msg)
     {
+    case WM_SIZE:
+        {
+            RECT rc;
+            GetClientRect(hwnd, &rc);
+            ResizeChildren(rc);
+            return 0;
+        }
+    case WM_DESTROY:
         PostQuitMessage(0);
         return 0;
     }
     return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
-// Overlay window procedure: draws a red circle
+// Overlay procedure: handles pen input and retains red circle
 LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch (msg)
     {
+    case WM_POINTERDOWN:
+        {
+            UINT32 pid = GET_POINTERID_WPARAM(wParam);
+            POINTER_INPUT_TYPE type;
+            if (SUCCEEDED(GetPointerType(pid, &type)) && type == PT_PEN)
+            {
+                g_isDrawing = true;
+                g_lastPoint.x = GET_X_LPARAM(lParam);
+                g_lastPoint.y = GET_Y_LPARAM(lParam);
+                SetCapture(hwnd);
+            }
+            return 0;
+        }
+    case WM_POINTERUPDATE:
+        {
+            if (g_isDrawing)
+            {
+                UINT32 pid = GET_POINTERID_WPARAM(wParam);
+                POINTER_INPUT_TYPE type;
+                if (SUCCEEDED(GetPointerType(pid, &type)) && type == PT_PEN)
+                {
+                    POINT pt = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+                    HDC hdc = GetDC(hwnd);
+                    MoveToEx(hdc, g_lastPoint.x, g_lastPoint.y, NULL);
+                    LineTo(hdc, pt.x, pt.y);
+                    ReleaseDC(hwnd, hdc);
+                    g_lastPoint = pt;
+                }
+            }
+            return 0;
+        }
+    case WM_POINTERUP:
+        {
+            if (g_isDrawing)
+            {
+                g_isDrawing = false;
+                ReleaseCapture();
+            }
+            return 0;
+        }
     case WM_PAINT:
         {
             PAINTSTRUCT ps;
@@ -35,22 +108,22 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             return 0;
         }
     case WM_ERASEBKGND:
-        return 1; // prevent flicker
+        return 1;
     }
     return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
 int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow)
 {
-    // Register main window class
+    // Register window classes
     WNDCLASSW wc = {};
     wc.lpfnWndProc = MainWndProc;
     wc.hInstance = hInstance;
     wc.lpszClassName = L"MainWindowClass";
+    wc.style = CS_HREDRAW | CS_VREDRAW;
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
     RegisterClassW(&wc);
 
-    // Register overlay window class
     WNDCLASSW wc2 = {};
     wc2.lpfnWndProc = OverlayWndProc;
     wc2.hInstance = hInstance;
@@ -59,57 +132,46 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow)
     wc2.hCursor = LoadCursor(NULL, IDC_ARROW);
     RegisterClassW(&wc2);
 
-    // Create main window
-    HWND mainHwnd = CreateWindowExW(
-        0,
-        L"MainWindowClass",
-        L"WebView2App - Main",
-        WS_OVERLAPPEDWINDOW,
-        CW_USEDEFAULT, CW_USEDEFAULT,
-        800, 600,
-        nullptr, nullptr, hInstance, nullptr);
+    // Create windows
+    g_mainHwnd = CreateWindowExW(0, L"MainWindowClass", L"WebView2App - Main",
+                                 WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 800, 600,
+                                 nullptr, nullptr, hInstance, nullptr);
 
-    // Create transparent overlay child
-    HWND overlayHwnd = CreateWindowExW(
-        WS_EX_TRANSPARENT,
-        L"OverlayWindowClass",
-        nullptr,
-        WS_CHILD | WS_VISIBLE,
+    // Transparent overlay
+    g_overlayHwnd = CreateWindowExW(
+        WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST,
+        L"OverlayWindowClass", nullptr,
+        WS_POPUP | WS_VISIBLE,
         0, 0, 800, 600,
-        mainHwnd,
-        (HMENU)ID_OVERLAY,
-        hInstance,
-        nullptr);
+        nullptr, nullptr, hInstance, nullptr);
+    SetLayeredWindowAttributes(g_overlayHwnd, 0, 255, LWA_ALPHA);
 
-    ShowWindow(mainHwnd, nCmdShow);
+    ShowWindow(g_mainHwnd, nCmdShow);
+    EnableMouseInPointer(TRUE);
 
     // Initialize WebView2
-    ComPtr<ICoreWebView2Environment> webViewEnvironment;
-    ComPtr<ICoreWebView2Controller> webViewController;
-    ComPtr<ICoreWebView2> webView;
-
     CreateCoreWebView2EnvironmentWithOptions(
         nullptr, nullptr, nullptr,
         Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
-            [mainHwnd, &webViewController, &webView](HRESULT result, ICoreWebView2Environment* env) -> HRESULT
+            [](HRESULT result, ICoreWebView2Environment* env) -> HRESULT
             {
                 if (SUCCEEDED(result) && env)
                 {
                     env->CreateCoreWebView2Controller(
-                        mainHwnd,
+                        g_mainHwnd,
                         Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
-                            [mainHwnd, &webViewController, &webView](HRESULT result2,
-                                                                     ICoreWebView2Controller* controller) -> HRESULT
+                            [](HRESULT result2, ICoreWebView2Controller* controller) -> HRESULT
                             {
                                 if (SUCCEEDED(result2) && controller)
                                 {
-                                    webViewController = controller;
-                                    controller->get_CoreWebView2(&webView);
-                                    RECT bounds;
-                                    GetClientRect(mainHwnd, &bounds);
-                                    webViewController->put_Bounds(bounds);
-                                    webView->Navigate(
-                                        L"C:\\Users\\ik1ne\\Sources\\Notetaking\\experiments\\layered_window_2_cpp\\index.html");
+                                    g_webViewController = controller;
+                                    ComPtr<ICoreWebView2> webview;
+                                    controller->get_CoreWebView2(&webview);
+                                    RECT rc;
+                                    GetClientRect(g_mainHwnd, &rc);
+                                    ResizeChildren(rc);
+                                    webview->Navigate(
+                                        L"file:///C:/Users/ik1ne/Sources/Notetaking/experiments/layered_window_2_cpp/index.html");
                                 }
                                 return S_OK;
                             }
@@ -119,7 +181,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow)
             }
         ).Get());
 
-    // Main message loop
+    // Message loop
     MSG msg;
     while (GetMessage(&msg, nullptr, 0, 0))
     {
