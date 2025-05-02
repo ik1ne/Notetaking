@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="utf-8">
-    <title>Monaco Editor with Stylus Canvas Overlay (Fixed Capture)</title>
+    <title>Monaco Editor with Stylus Canvas Overlay (Point-Level Pressure)</title>
     <style>
         html, body, #container {
             margin: 0;
@@ -104,11 +104,13 @@
         function setMode(m) {
             mode = m;
             canvas.style.pointerEvents = m === 'pass' ? 'none' : 'auto';
+            // Redraw strokes after mode change to ensure visibility
+            scheduleRedraw();
         }
 
         setMode('pass');
 
-        // Stroke data
+        // Stroke data: each point holds x,y,pressure
         const strokes = [];
         let currentStroke = null;
         let isDrawing = false;
@@ -116,24 +118,25 @@
 
         function computeBBox(points) {
             let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-            for (const p of points) {
-                if (p.x < minX) minX = p.x;
-                if (p.y < minY) minY = p.y;
-                if (p.x > maxX) maxX = p.x;
-                if (p.y > maxY) maxY = p.y;
+            for (const pt of points) {
+                if (pt.x < minX) minX = pt.x;
+                if (pt.y < minY) minY = pt.y;
+                if (pt.x > maxX) maxX = pt.x;
+                if (pt.y > maxY) maxY = pt.y;
             }
             return {minX, minY, maxX, maxY};
         }
 
-        // Handlers on canvas ensure pointercapture delivers events even outside
+        // Start stroke on pen down
         canvas.addEventListener('pointerdown', e => {
-            const rect = canvas.getBoundingClientRect();
             if (mode === 'draw' && e.pointerType === 'pen') {
                 e.preventDefault();
                 isDrawing = true;
                 canvas.setPointerCapture(e.pointerId);
+                const rect = canvas.getBoundingClientRect();
                 const x = e.clientX - rect.left;
                 const y = e.clientY - rect.top + editor.getScrollTop();
+                // Initialize stroke points array
                 currentStroke = {points: [{x, y, p: e.pressure}], bbox: null};
                 ctx.beginPath();
                 ctx.moveTo(x, y - editor.getScrollTop());
@@ -148,12 +151,14 @@
             }
         });
 
+        // Continue stroke or scroll on move
         canvas.addEventListener('pointermove', e => {
             if (!isDrawing) return;
             const rect = canvas.getBoundingClientRect();
             if (mode === 'draw' && e.pointerType === 'pen') {
                 const x = e.clientX - rect.left;
                 const y = e.clientY - rect.top + editor.getScrollTop();
+                // Record each point with its own pressure
                 currentStroke.points.push({x, y, p: e.pressure});
                 ctx.lineWidth = 2 * e.pressure;
                 ctx.lineCap = 'round';
@@ -168,30 +173,30 @@
             }
         });
 
+        // End stroke or scroll on up
         canvas.addEventListener('pointerup', e => {
-            if (isDrawing) {
-                if (mode === 'draw') {
-                    currentStroke.bbox = computeBBox(currentStroke.points);
-                    strokes.push(currentStroke);
-                    currentStroke = null;
-                }
-                isDrawing = false;
-                canvas.releasePointerCapture(e.pointerId);
+            if (!isDrawing) return;
+            if (mode === 'draw' && currentStroke) {
+                currentStroke.bbox = computeBBox(currentStroke.points);
+                strokes.push(currentStroke);
+                currentStroke = null;
             }
-        });
-        canvas.addEventListener('pointercancel', e => {
-            if (isDrawing) {
-                if (mode === 'draw' && currentStroke) {
-                    currentStroke.bbox = computeBBox(currentStroke.points);
-                    strokes.push(currentStroke);
-                    currentStroke = null;
-                }
-                isDrawing = false;
-                canvas.releasePointerCapture(e.pointerId);
-            }
+            isDrawing = false;
+            canvas.releasePointerCapture(e.pointerId);
         });
 
-        // Redraw only visible strokes
+        canvas.addEventListener('pointercancel', e => {
+            if (!isDrawing) return;
+            if (mode === 'draw' && currentStroke) {
+                currentStroke.bbox = computeBBox(currentStroke.points);
+                strokes.push(currentStroke);
+                currentStroke = null;
+            }
+            isDrawing = false;
+            canvas.releasePointerCapture(e.pointerId);
+        });
+
+        // Redraw visible strokes only
         function redrawCanvas() {
             const rect = canvas.getBoundingClientRect();
             ctx.clearRect(0, 0, rect.width, rect.height);
@@ -200,6 +205,7 @@
             ctx.save();
             ctx.translate(0, -viewTop);
             ctx.lineCap = 'round';
+
             for (const stroke of strokes) {
                 const bb = stroke.bbox;
                 if (!bb || bb.maxY < viewTop || bb.minY > viewBottom) continue;
@@ -207,7 +213,7 @@
                 stroke.points.forEach((pt, i) => {
                     if (i === 0) ctx.moveTo(pt.x, pt.y);
                     else {
-                        ctx.lineWidth = 2 * pt.p;
+                        ctx.lineWidth = 2 * pt.p;  // per-point pressure
                         ctx.lineTo(pt.x, pt.y);
                     }
                 });
