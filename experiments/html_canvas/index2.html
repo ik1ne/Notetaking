@@ -2,24 +2,23 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Monaco + Canvas Demo (100k Strokes, Optimized)</title>
+    <title>Monaco Editor Stylus Drawing Demo</title>
+    <script src="https://unpkg.com/monaco-editor@latest/min/vs/loader.js"></script>
     <style>
-        html, body, #wrapper, #editor-container {
+        html, body {
             margin: 0;
             padding: 0;
-            width: 100%;
             height: 100%;
-            overflow: hidden;
         }
 
-        #wrapper {
+        #container {
+            width: 800px;
+            height: 600px;
             position: relative;
+            border: 1px solid #ccc;
         }
 
-        #editor-container {
-            position: absolute;
-            top: 0;
-            left: 0;
+        #editor {
             width: 100%;
             height: 100%;
         }
@@ -28,196 +27,171 @@
             position: absolute;
             top: 0;
             left: 0;
-            width: 100%;
-            height: 100%;
-            pointer-events: none;
             touch-action: none;
-            z-index: 10;
         }
     </style>
 </head>
 <body>
-<div id="wrapper">
-    <div id="editor-container"></div>
+<div id="container">
+    <div id="editor"></div>
     <canvas id="overlay"></canvas>
 </div>
-
-<script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js"></script>
 <script>
-    // Stroke storage and offscreen buffer
-    const strokes = [];
-    let offscreen, offctx;
-
-    require.config({paths: {'vs': 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.38.0/min/vs'}});
+    // Configure Monaco loader
+    require.config({paths: {'vs': 'https://unpkg.com/monaco-editor@latest/min/vs'}});
     require(['vs/editor/editor.main'], function () {
-        // 1) Populate editor with 1000 lines for scroll testing
-        const lines = ['function longFunction() {'];
-        for (let i = 0; i < 1000; i++) lines.push(`  console.log("line ${i}");`);
-        lines.push('}');
-        window.editor = monaco.editor.create(
-            document.getElementById('editor-container'), {
-                value: lines.join('\n'),
-                language: 'javascript',
-                theme: 'vs-light',
-                automaticLayout: true
-            }
-        );
+        // Create Monaco editor with 1000 lines of dummy code
+        const editor = monaco.editor.create(document.getElementById('editor'), {
+            value: Array.from({length: 1000}, (_, i) => '// Line ' + (i + 1)).join("\n"),
+            language: 'javascript',
+        });
 
-        // 2) Setup offscreen canvas matching full document size
-        const docW = editor.getScrollWidth(), docH = editor.getScrollHeight();
-        offscreen = document.createElement('canvas');
-        offscreen.width = docW;
-        offscreen.height = docH;
-        offctx = offscreen.getContext('2d');
-        offctx.lineCap = 'round';
-        offctx.lineJoin = 'round';
+        const container = document.getElementById('container');
+        const canvas = document.getElementById('overlay');
+        const ctx = canvas.getContext('2d');
+        let strokes = [];
+        let currentStroke = null;
+        let drawing = false;
+        let drawRequested = false;
+        // Track scroll offsets
+        let scrollTop = editor.getScrollTop();
+        let scrollLeft = editor.getScrollLeft();
 
-        // 3) Prepopulate 100k random strokes onto offscreen
-        for (let i = 0; i < 100000; i++) {
-            const stroke = [];
-            let x = Math.random() * docW;
-            let y = Math.random() * docH;
-            for (let j = 0; j < 5; j++) {
-                const p = {x, y, pressure: Math.random()};
-                stroke.push(p);
-                if (j > 0) {
-                    const prev = stroke[j - 1];
-                    offctx.lineWidth = 1 + p.pressure * 4;
-                    offctx.beginPath();
-                    offctx.moveTo(prev.x, prev.y);
-                    offctx.lineTo(p.x, p.y);
-                    offctx.stroke();
-                }
-                x += (Math.random() - 0.5) * 200;
-                y += (Math.random() - 0.5) * 50;
-            }
-            strokes.push(stroke);
+        // Resize canvas to match container size
+        function resizeCanvas() {
+            canvas.width = container.clientWidth;
+            canvas.height = container.clientHeight;
         }
 
-        // 4) Hook scroll and resize to re-render viewport
-        editor.onDidScrollChange(render);
-        window.addEventListener('resize', resizeCanvas);
-
-        // 5) Initial sizing and mode
         resizeCanvas();
-        setMode('pass');
-    });
-</script>
+        window.addEventListener('resize', () => {
+            resizeCanvas();
+            scheduleDraw();
+        });
 
-<script>
-    const canvas = document.getElementById('overlay');
-    const ctx = canvas.getContext('2d');
-    let mode = 'pass', drawing = false, currentStroke = null, lastPos = {x: 0, y: 0};
-
-    // Resize the canvas to fit the container
-    function resizeCanvas() {
-        canvas.width = canvas.clientWidth;
-        canvas.height = canvas.clientHeight;
-        render();
-    }
-
-    // Draw only the visible region from the offscreen buffer
-    function render() {
-        const sl = editor.getScrollLeft(), st = editor.getScrollTop();
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.globalAlpha = 0.2; // semi-transparent strokes
-        ctx.drawImage(
-            offscreen,
-            sl, st,
-            canvas.width, canvas.height,
-            0, 0,
-            canvas.width, canvas.height
-        );
-        ctx.globalAlpha = 1;
-    }
-
-    // Mode toggling: pass-through vs capture
-    function setMode(m) {
-        mode = m;
-        if (mode === 'pass') {
-            canvas.style.pointerEvents = 'none';
-            canvas.style.touchAction = 'auto';
-        } else {
-            canvas.style.pointerEvents = 'auto';
-            canvas.style.touchAction = 'none';
-        }
-    }
-
-    // Keyboard shortcuts for modes
-    document.addEventListener('keydown', e => {
-        if (!e.ctrlKey && !e.altKey && e.code.startsWith('Digit')) {
-            switch (e.code) {
-                case 'Digit1':
-                    setMode('pass');
-                    break;
-                case 'Digit2':
-                    setMode('draw');
-                    break;
-                case 'Digit3':
-                    setMode('scroll');
-                    break;
+        // Schedule a redraw on the next animation frame
+        function scheduleDraw() {
+            if (!drawRequested) {
+                drawRequested = true;
+                requestAnimationFrame(() => {
+                    drawRequested = false;
+                    draw();
+                });
             }
-            e.preventDefault();
         }
-    });
 
-    // Handle pointer events for new strokes or scrolling
-    canvas.addEventListener('pointerdown', e => {
-        const sl = editor.getScrollLeft(), st = editor.getScrollTop();
-        if (mode === 'draw' && e.pointerType === 'pen') {
-            currentStroke = [];
+        // Draw visible strokes
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.save();
+            ctx.translate(-scrollLeft, -scrollTop);
+            ctx.strokeStyle = 'black';
+            ctx.lineJoin = 'round';
+            ctx.lineCap = 'round';
+            const viewX1 = scrollLeft;
+            const viewY1 = scrollTop;
+            const viewX2 = scrollLeft + canvas.width;
+            const viewY2 = scrollTop + canvas.height;
+            // Draw completed strokes
+            for (const stroke of strokes) {
+                if (stroke.maxX < viewX1 || stroke.minX > viewX2 ||
+                    stroke.maxY < viewY1 || stroke.minY > viewY2) {
+                    continue;
+                }
+                ctx.lineWidth = stroke.width;
+                ctx.stroke(stroke.path);
+            }
+            // Draw current stroke
+            if (currentStroke) {
+                const pts = currentStroke.points;
+                if (pts.length > 0) {
+                    ctx.lineWidth = currentStroke.width;
+                    ctx.beginPath();
+                    ctx.moveTo(pts[0].x, pts[0].y);
+                    for (let i = 1; i < pts.length; i++) {
+                        ctx.lineTo(pts[i].x, pts[i].y);
+                    }
+                    ctx.stroke();
+                }
+            }
+            ctx.restore();
+        }
+
+        // Add a point to the current stroke and update bounding box
+        function addPointToStroke(x, y, pressure) {
+            currentStroke.points.push({x, y});
+            currentStroke.totalPressure += pressure;
+            if (x < currentStroke.minX) currentStroke.minX = x;
+            if (x > currentStroke.maxX) currentStroke.maxX = x;
+            if (y < currentStroke.minY) currentStroke.minY = y;
+            if (y > currentStroke.maxY) currentStroke.maxY = y;
+        }
+
+        // Handle stylus pointer down
+        canvas.addEventListener('pointerdown', (e) => {
+            if (e.pointerType !== 'pen') return;
+            drawing = true;
+            canvas.setPointerCapture(e.pointerId);
+            currentStroke = {
+                points: [],
+                minX: Infinity, minY: Infinity,
+                maxX: -Infinity, maxY: -Infinity,
+                totalPressure: 0,
+                width: 1
+            };
+            const x = e.offsetX + scrollLeft;
+            const y = e.offsetY + scrollTop;
+            addPointToStroke(x, y, e.pressure);
+            scheduleDraw();
+        });
+
+        // Handle stylus pointer move
+        canvas.addEventListener('pointermove', (e) => {
+            if (!drawing || e.pointerType !== 'pen') return;
+            const x = e.offsetX + scrollLeft;
+            const y = e.offsetY + scrollTop;
+            addPointToStroke(x, y, e.pressure);
+            scheduleDraw();
+        });
+
+        // End the stroke on pointer up or cancel
+        function endStroke(e) {
+            if (!drawing || e.pointerType !== 'pen') return;
+            drawing = false;
+            canvas.releasePointerCapture(e.pointerId);
+            const x = e.offsetX + scrollLeft;
+            const y = e.offsetY + scrollTop;
+            addPointToStroke(x, y, e.pressure);
+            // Calculate stroke width from average pressure
+            const avgPressure = currentStroke.totalPressure / currentStroke.points.length;
+            currentStroke.width = Math.max(1, avgPressure * 10);
+            // Build Path2D for the stroke
+            const path = new Path2D();
+            const pts = currentStroke.points;
+            if (pts.length > 0) {
+                path.moveTo(pts[0].x, pts[0].y);
+                for (let i = 1; i < pts.length; i++) {
+                    path.lineTo(pts[i].x, pts[i].y);
+                }
+            }
+            currentStroke.path = path;
             strokes.push(currentStroke);
-            const p = {x: e.clientX + sl, y: e.clientY + st, pressure: e.pressure};
-            currentStroke.push(p);
-            drawing = true;
-            canvas.setPointerCapture(e.pointerId);
-            e.preventDefault();
-        } else if ((mode === 'draw' && e.pointerType === 'mouse') ||
-            (mode === 'scroll' && (e.pointerType === 'touch' || e.button === 1))) {
-            drawing = true;
-            lastPos = {x: e.clientX, y: e.clientY};
-            canvas.setPointerCapture(e.pointerId);
-            e.preventDefault();
+            currentStroke = null;
+            scheduleDraw();
         }
-    });
 
-    canvas.addEventListener('pointermove', e => {
-        if (!drawing) return;
-        const sl = editor.getScrollLeft(), st = editor.getScrollTop();
-        if (mode === 'draw' && e.pointerType === 'pen') {
-            const p = {x: e.clientX + sl, y: e.clientY + st, pressure: e.pressure};
-            currentStroke.push(p);
-            const prev = currentStroke[currentStroke.length - 2];
-            // draw new segment directly to offscreen
-            offctx.lineWidth = 1 + p.pressure * 4;
-            offctx.beginPath();
-            offctx.moveTo(prev.x, prev.y);
-            offctx.lineTo(p.x, p.y);
-            offctx.stroke();
-            render();
-            e.preventDefault();
-        } else if (mode === 'draw' && e.pointerType === 'mouse') {
-            const dx = lastPos.x - e.clientX, dy = lastPos.y - e.clientY;
-            editor.setScrollTop(editor.getScrollTop() + dy);
-            editor.setScrollLeft(editor.getScrollLeft() + dx);
-            lastPos = {x: e.clientX, y: e.clientY};
-            e.preventDefault();
-        } else if (mode === 'scroll') {
-            const dx = lastPos.x - e.clientX, dy = lastPos.y - e.clientY;
-            editor.setScrollTop(editor.getScrollTop() + dy);
-            editor.setScrollLeft(editor.getScrollLeft() + dx);
-            lastPos = {x: e.clientX, y: e.clientY};
-            e.preventDefault();
-        }
-    });
+        canvas.addEventListener('pointerup', endStroke);
+        canvas.addEventListener('pointercancel', endStroke);
 
-    canvas.addEventListener('pointerup', e => {
-        drawing = false;
-        canvas.releasePointerCapture(e.pointerId);
-    });
-    canvas.addEventListener('pointercancel', e => {
-        drawing = false;
-        canvas.releasePointerCapture(e.pointerId);
+        // Redraw when the editor is scrolled
+        editor.onDidScrollChange((e) => {
+            scrollTop = e.scrollTop;
+            scrollLeft = e.scrollLeft;
+            scheduleDraw();
+        });
+
+        // Initial draw
+        draw();
     });
 </script>
 </body>
