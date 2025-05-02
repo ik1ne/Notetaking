@@ -1,4 +1,8 @@
 #include <windows.h>
+#include <wrl.h>
+#include <WebView2.h>
+
+using namespace Microsoft::WRL;
 
 #define ID_OVERLAY 1001
 
@@ -79,7 +83,43 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow)
 
     ShowWindow(mainHwnd, nCmdShow);
 
-    // Message loop
+    // Initialize WebView2
+    ComPtr<ICoreWebView2Environment> webViewEnvironment;
+    ComPtr<ICoreWebView2Controller> webViewController;
+    ComPtr<ICoreWebView2> webView;
+
+    CreateCoreWebView2EnvironmentWithOptions(
+        nullptr, nullptr, nullptr,
+        Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
+            [mainHwnd, &webViewController, &webView](HRESULT result, ICoreWebView2Environment* env) -> HRESULT
+            {
+                if (SUCCEEDED(result) && env)
+                {
+                    env->CreateCoreWebView2Controller(
+                        mainHwnd,
+                        Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
+                            [mainHwnd, &webViewController, &webView](HRESULT result2,
+                                                                     ICoreWebView2Controller* controller) -> HRESULT
+                            {
+                                if (SUCCEEDED(result2) && controller)
+                                {
+                                    webViewController = controller;
+                                    controller->get_CoreWebView2(&webView);
+                                    RECT bounds;
+                                    GetClientRect(mainHwnd, &bounds);
+                                    webViewController->put_Bounds(bounds);
+                                    webView->Navigate(
+                                        L"C:\\Users\\ik1ne\\Sources\\Notetaking\\experiments\\layered_window_2_cpp\\index.html");
+                                }
+                                return S_OK;
+                            }
+                        ).Get());
+                }
+                return S_OK;
+            }
+        ).Get());
+
+    // Main message loop
     MSG msg;
     while (GetMessage(&msg, nullptr, 0, 0))
     {
