@@ -10,7 +10,7 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         PostQuitMessage(0);
         return 0;
     }
-    return DefWindowProc(hwnd, msg, wParam, lParam);
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
 // Overlay window procedure: draws a red circle
@@ -31,55 +31,57 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             return 0;
         }
     case WM_ERASEBKGND:
-        return 1; // skip background erase
+        return 1; // prevent flicker
     }
-    return DefWindowProc(hwnd, msg, wParam, lParam);
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
-int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
+int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow)
 {
     // Register main window class
-    WNDCLASS wc = {};
+    WNDCLASSW wc = {};
     wc.lpfnWndProc = MainWndProc;
     wc.hInstance = hInstance;
-    wc.lpszClassName = "MainWindowClass";
+    wc.lpszClassName = L"MainWindowClass";
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
-    RegisterClass(&wc);
+    RegisterClassW(&wc);
 
     // Register overlay window class
-    WNDCLASS wc2 = {};
+    WNDCLASSW wc2 = {};
     wc2.lpfnWndProc = OverlayWndProc;
     wc2.hInstance = hInstance;
-    wc2.lpszClassName = "OverlayWindowClass";
+    wc2.lpszClassName = L"OverlayWindowClass";
     wc2.style = CS_HREDRAW | CS_VREDRAW;
     wc2.hCursor = LoadCursor(NULL, IDC_ARROW);
-    RegisterClass(&wc2);
+    RegisterClassW(&wc2);
 
     // Create main window
-    HWND mainHwnd = CreateWindowEx(
+    HWND mainHwnd = CreateWindowExW(
         0,
-        "MainWindowClass",
-        "WebView2App - Main",
+        L"MainWindowClass",
+        L"WebView2App - Main",
         WS_OVERLAPPEDWINDOW,
-        CW_USEDEFAULT, CW_USEDEFAULT, 800, 600,
-        NULL, NULL, hInstance, NULL);
-    ShowWindow(mainHwnd, nCmdShow);
+        CW_USEDEFAULT, CW_USEDEFAULT,
+        800, 600,
+        nullptr, nullptr, hInstance, nullptr);
 
-    // Create overlay child
-    HWND overlayHwnd = CreateWindowEx(
+    // Create transparent overlay child
+    HWND overlayHwnd = CreateWindowExW(
         WS_EX_TRANSPARENT,
-        "OverlayWindowClass",
-        NULL,
+        L"OverlayWindowClass",
+        nullptr,
         WS_CHILD | WS_VISIBLE,
         0, 0, 800, 600,
         mainHwnd,
         (HMENU)ID_OVERLAY,
         hInstance,
-        NULL);
+        nullptr);
+
+    ShowWindow(mainHwnd, nCmdShow);
 
     // Message loop
     MSG msg;
-    while (GetMessage(&msg,NULL, 0, 0))
+    while (GetMessage(&msg, nullptr, 0, 0))
     {
         TranslateMessage(&msg);
         DispatchMessage(&msg);
