@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
     <meta charset="utf-8">
     <title>Monaco Editor with Stylus Canvas Overlay (Fixed)</title>
@@ -50,32 +50,26 @@
     </div>
 </div>
 
-<link rel="stylesheet"
-      href="https://unpkg.com/monaco-editor@0.39.0/min/vs/editor/editor.main.css">
+<link rel="stylesheet" href="https://unpkg.com/monaco-editor@0.39.0/min/vs/editor/editor.main.css">
 <script src="https://unpkg.com/monaco-editor@0.39.0/min/vs/loader.js"></script>
 <script>
     require.config({paths: {'vs': 'https://unpkg.com/monaco-editor@0.39.0/min/vs'}});
     require(['vs/editor/editor.main'], function () {
-        // Create the Monaco editor in #editorContainer.
         const editor = monaco.editor.create(
             document.getElementById('editorContainer'),
             {
                 value: Array(1000).fill('function foo() { console.log("Hello World"); }').join('\n'),
                 language: 'javascript',
                 theme: 'vs-light',
-                automaticLayout: true
+                minimap: {enabled: false}
             }
         );
 
-        // Overlay setup
         const canvas = document.getElementById('overlayCanvas');
         const ctx = canvas.getContext('2d');
         const dpr = window.devicePixelRatio || 1;
 
-        //
-        // --- MOVE THESE BEFORE ANY scheduleRedraw() CALLS ---
-        //
-        // Flag & scheduler for rAF-based redraw
+        // rAF redraw scheduler
         let redrawScheduled = false;
 
         function scheduleRedraw() {
@@ -87,26 +81,7 @@
             });
         }
 
-        // Stroke storage
-        const strokes = [];
-        let currentStroke = null;
-        let isDrawing = false;
-        let scrollStartY, scrollStartX, origScrollTop, origScrollLeft, pointerId;
-        let mode = 'pass'; // 'pass' | 'draw' | 'scroll'
-
-        // Helpers
-        function computeBBox(points) {
-            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-            for (const p of points) {
-                if (p.x < minX) minX = p.x;
-                if (p.y < minY) minY = p.y;
-                if (p.x > maxX) maxX = p.x;
-                if (p.y > maxY) maxY = p.y;
-            }
-            return {minX, minY, maxX, maxY};
-        }
-
-        // Resize canvas to match editor container
+        // Resize canvas to match editor
         function resizeCanvas() {
             const rect = editor.getDomNode().getBoundingClientRect();
             canvas.style.width = rect.width + 'px';
@@ -120,7 +95,8 @@
         window.addEventListener('resize', resizeCanvas);
         resizeCanvas();
 
-        // Mode buttons
+        // Modes: pass, draw, scroll
+        let mode = 'pass';
         document.getElementById('passBtn').onclick = () => setMode('pass');
         document.getElementById('drawBtn').onclick = () => setMode('draw');
         document.getElementById('scrollBtn').onclick = () => setMode('scroll');
@@ -132,12 +108,30 @@
 
         setMode('pass');
 
+        // Stroke data
+        const strokes = [];
+        let currentStroke = null;
+        let isDrawing = false;
+        let scrollStartY, scrollStartX, origScrollTop, origScrollLeft, pointerId;
+
+        function computeBBox(points) {
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            for (const p of points) {
+                if (p.x < minX) minX = p.x;
+                if (p.y < minY) minY = p.y;
+                if (p.x > maxX) maxX = p.x;
+                if (p.y > maxY) maxY = p.y;
+            }
+            return {minX, minY, maxX, maxY};
+        }
+
         // Pointer events
         canvas.addEventListener('pointerdown', e => {
             if (mode === 'draw' && e.pointerType === 'pen') {
                 e.preventDefault();
                 pointerId = e.pointerId;
                 isDrawing = true;
+                canvas.setPointerCapture(pointerId);
                 const rect = canvas.getBoundingClientRect();
                 const x = e.clientX - rect.left;
                 const y = e.clientY - rect.top + editor.getScrollTop();
@@ -148,6 +142,7 @@
                 e.preventDefault();
                 pointerId = e.pointerId;
                 isDrawing = true;
+                canvas.setPointerCapture(pointerId);
                 scrollStartY = e.clientY;
                 scrollStartX = e.clientX;
                 origScrollTop = editor.getScrollTop();
@@ -178,6 +173,7 @@
         canvas.addEventListener('pointerup', e => {
             if (!isDrawing || e.pointerId !== pointerId) return;
             isDrawing = false;
+            canvas.releasePointerCapture(pointerId);
             pointerId = null;
             if (mode === 'draw' && currentStroke) {
                 currentStroke.bbox = computeBBox(currentStroke.points);
@@ -185,11 +181,19 @@
                 currentStroke = null;
             }
         });
+
         canvas.addEventListener('pointercancel', e => {
-            canvas.dispatchEvent(new PointerEvent('pointerup', e));
+            if (e.pointerId !== pointerId) return;
+            isDrawing = false;
+            canvas.releasePointerCapture(pointerId);
+            pointerId = null;
+            if (mode === 'draw' && currentStroke) {
+                currentStroke.bbox = computeBBox(currentStroke.points);
+                strokes.push(currentStroke);
+                currentStroke = null;
+            }
         });
 
-        // Redraw only visible strokes
         function redrawCanvas() {
             const rect = canvas.getBoundingClientRect();
             ctx.clearRect(0, 0, rect.width, rect.height);
@@ -215,10 +219,7 @@
             ctx.restore();
         }
 
-        // Also redraw when the editor scrolls by other means
         editor.onDidScrollChange(() => scheduleRedraw());
-
-        // Initial draw
         scheduleRedraw();
     });
 </script>
