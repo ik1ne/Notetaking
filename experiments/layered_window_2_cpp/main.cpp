@@ -36,12 +36,10 @@ void InitializeWebView(HWND hwnd)
                                 {
                                     g_controller = controller;
                                     controller->get_CoreWebView2(&g_webview);
-                                    // size to client area
                                     RECT rc;
                                     GetClientRect(hwnd, &rc);
                                     controller->put_Bounds(rc);
                                     controller->put_IsVisible(TRUE);
-                                    // navigate
                                     g_webview->Navigate(
                                         L"file:///C:/Users/ik1ne/Sources/Notetaking/experiments/layered_window_2_cpp/index.html"
                                     );
@@ -144,7 +142,7 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
     }
     if (msg == WM_ERASEBKGND)
     {
-        return 1; // prevent flicker
+        return 1;
     }
     return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
@@ -186,9 +184,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow)
     // Initialize WebView2
     InitializeWebView(g_mainHwnd);
 
-    // Create overlay (click-through except pen)
+    // Create overlay (receives pen input)
     g_overlayHwnd = CreateWindowExW(
-        WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+        WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
         L"OverlayWindowClass",
         nullptr, WS_POPUP,
         0, 0, 0, 0,
@@ -201,7 +199,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow)
     GetClientRect(g_mainHwnd, &rc);
     ResizeChildren(rc);
 
-    // Message loop
+    // Main loop
     MSG msg;
     while (GetMessage(&msg, nullptr, 0, 0))
     {
