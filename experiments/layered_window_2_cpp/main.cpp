@@ -12,10 +12,8 @@ using namespace Microsoft::WRL;
 // Globals
 static HWND g_mainHwnd = nullptr;
 static HWND g_overlayHwnd = nullptr;
-static HWND g_webViewHwnd = nullptr;
 static ComPtr<ICoreWebView2Controller> g_controller;
 static ComPtr<ICoreWebView2> g_webview;
-
 static std::vector<POINT> g_strokePoints;
 static std::mutex g_mutex;
 
@@ -25,27 +23,25 @@ void InitializeWebView(HWND hwnd)
     CreateCoreWebView2EnvironmentWithOptions(
         nullptr, nullptr, nullptr,
         Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
-            [&](HRESULT hr, ICoreWebView2Environment* env) -> HRESULT
+            [hwnd](HRESULT hr, ICoreWebView2Environment* env) -> HRESULT
             {
                 if (SUCCEEDED(hr) && env)
                 {
                     env->CreateCoreWebView2Controller(
                         hwnd,
                         Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
-                            [&](HRESULT hr2, ICoreWebView2Controller* controller) -> HRESULT
+                            [hwnd](HRESULT hr2, ICoreWebView2Controller* controller) -> HRESULT
                             {
                                 if (SUCCEEDED(hr2) && controller)
                                 {
                                     g_controller = controller;
-                                    g_controller->get_Hwnd(&g_webViewHwnd);
-                                    g_controller->get_CoreWebView2(&g_webview);
-
-                                    // Size to client area
+                                    controller->get_CoreWebView2(&g_webview);
+                                    // size to client area
                                     RECT rc;
                                     GetClientRect(hwnd, &rc);
-                                    g_controller->put_Bounds(rc);
-
-                                    // Navigate to your local page
+                                    controller->put_Bounds(rc);
+                                    controller->put_IsVisible(TRUE);
+                                    // navigate
                                     g_webview->Navigate(
                                         L"file:///C:/Users/ik1ne/Sources/Notetaking/experiments/layered_window_2_cpp/index.html"
                                     );
@@ -57,7 +53,7 @@ void InitializeWebView(HWND hwnd)
             }).Get());
 }
 
-// Resize WebView2 and overlay to match main window
+// Resize WebView2 and overlay
 void ResizeChildren(const RECT& rc)
 {
     if (g_controller)
@@ -74,8 +70,7 @@ void ResizeChildren(const RECT& rc)
             pt.x, pt.y,
             rc.right - rc.left,
             rc.bottom - rc.top,
-            SWP_NOACTIVATE
-        );
+            SWP_NOACTIVATE);
     }
 }
 
@@ -90,16 +85,18 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             RECT rc;
             GetClientRect(hwnd, &rc);
             ResizeChildren(rc);
-            return 0;
+            break;
         }
     case WM_DESTROY:
         PostQuitMessage(0);
-        return 0;
+        break;
+    default:
+        return DefWindowProcW(hwnd, msg, wParam, lParam);
     }
-    return DefWindowProcW(hwnd, msg, wParam, lParam);
+    return 0;
 }
 
-// Overlay window procedure for pen drawing and mouse forwarding
+// Overlay window procedure: pen drawing only
 LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     if (msg == WM_POINTERDOWN || msg == WM_POINTERUPDATE || msg == WM_POINTERUP)
@@ -108,7 +105,6 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         POINTER_INPUT_TYPE type;
         if (SUCCEEDED(GetPointerType(pid, &type)) && type == PT_PEN)
         {
-            // Record stroke points
             POINT pt{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
             std::lock_guard<std::mutex> lock(g_mutex);
             if (msg == WM_POINTERDOWN)
@@ -125,27 +121,6 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             else if (msg == WM_POINTERUP)
             {
                 ReleaseCapture();
-            }
-        }
-        else
-        {
-            // Forward other pointer events as mouse messages
-            if (g_webViewHwnd)
-            {
-                POINTER_INFO pi;
-                if (GetPointerInfo(pid, &pi))
-                {
-                    POINT pt = pi.ptPixelLocation;
-                    ScreenToClient(g_webViewHwnd, &pt);
-                    UINT mouseMsg = 0;
-                    if (pi.pointerFlags & POINTER_FLAG_DOWN) mouseMsg = WM_LBUTTONDOWN;
-                    if (pi.pointerFlags & POINTER_FLAG_UPDATE) mouseMsg = WM_MOUSEMOVE;
-                    if (pi.pointerFlags & POINTER_FLAG_UP) mouseMsg = WM_LBUTTONUP;
-                    if (mouseMsg)
-                    {
-                        SendMessage(g_webViewHwnd, mouseMsg, 0, MAKELPARAM(pt.x, pt.y));
-                    }
-                }
             }
         }
         return 0;
@@ -177,7 +152,6 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 // Entry point
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow)
 {
-    // Initialize COM for WebView2 and pointer input
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     EnableMouseInPointer(TRUE);
 
@@ -200,33 +174,34 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow)
 
     // Create main window
     g_mainHwnd = CreateWindowExW(
-        0, L"MainWindowClass", L"Two-Layer Note-Taking",
+        0,
+        L"MainWindowClass",
+        L"Two-Layer Note-Taking",
         WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT,
         1024, 768,
         nullptr, nullptr, hInstance, nullptr);
     ShowWindow(g_mainHwnd, nCmdShow);
 
-    // Kick off WebView2
+    // Initialize WebView2
     InitializeWebView(g_mainHwnd);
 
-    // Create overlay (hidden from Alt+Tab)
+    // Create overlay (click-through except pen)
     g_overlayHwnd = CreateWindowExW(
-        WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
-        L"OverlayWindowClass", nullptr,
-        WS_POPUP,
+        WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+        L"OverlayWindowClass",
+        nullptr, WS_POPUP,
         0, 0, 0, 0,
         nullptr, nullptr, hInstance, nullptr);
-    // Make nearly transparent
     SetLayeredWindowAttributes(g_overlayHwnd, 0, 1, LWA_ALPHA);
     ShowWindow(g_overlayHwnd, nCmdShow);
 
-    // Initial resize
+    // Initial sizing
     RECT rc;
     GetClientRect(g_mainHwnd, &rc);
     ResizeChildren(rc);
 
-    // Main message loop
+    // Message loop
     MSG msg;
     while (GetMessage(&msg, nullptr, 0, 0))
     {
