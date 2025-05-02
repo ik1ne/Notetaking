@@ -112,6 +112,26 @@
 
         // Stroke data: each point holds x,y,pressure
         const strokes = [];
+        // Prepopulate 100k random strokes for performance testing
+        (function () {
+            const rect = editor.getDomNode().getBoundingClientRect();
+            const docWidth = rect.width;
+            const docHeight = editor.getScrollHeight();
+            for (let i = 0; i < 100000; i++) {
+                const stroke = {points: [], bbox: null};
+                // each stroke has 5 random segments
+                let startX = Math.random() * docWidth;
+                let startY = Math.random() * docHeight;
+                for (let j = 0; j < 5; j++) {
+                    const x = startX + (Math.random() - 0.5) * 100;
+                    const y = startY + (Math.random() - 0.5) * 100;
+                    const p = 0.5 + Math.random() * 0.5;
+                    stroke.points.push({x, y, p});
+                }
+                stroke.bbox = computeBBox(stroke.points);
+                strokes.push(stroke);
+            }
+        })();
         let currentStroke = null;
         let isDrawing = false;
         let scrollStartY, scrollStartX, origScrollTop, origScrollLeft;
