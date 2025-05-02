@@ -14,20 +14,27 @@ static ComPtr<ICoreWebView2Controller> g_webViewController;
 static bool g_isDrawing = false;
 static POINT g_lastPoint = {};
 
-// Resize overlay and WebView2
+// Resize overlay and WebView2 to match client area
 void ResizeChildren(RECT const& rc)
 {
-    if (g_overlayHwnd)
-    {
-        SetWindowPos(g_overlayHwnd, HWND_TOPMOST,
-                     rc.left, rc.top,
-                     rc.right - rc.left,
-                     rc.bottom - rc.top,
-                     SWP_NOACTIVATE);
-    }
+    // Resize WebView2
     if (g_webViewController)
     {
         g_webViewController->put_Bounds(rc);
+    }
+    // Position overlay window over client area
+    if (g_overlayHwnd && g_mainHwnd)
+    {
+        // Convert client coords to screen
+        POINT pt = {rc.left, rc.top};
+        ClientToScreen(g_mainHwnd, &pt);
+        SetWindowPos(
+            g_overlayHwnd,
+            HWND_TOPMOST,
+            pt.x, pt.y,
+            rc.right - rc.left,
+            rc.bottom - rc.top,
+            SWP_NOACTIVATE);
     }
 }
 
@@ -37,6 +44,7 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     switch (msg)
     {
     case WM_SIZE:
+    case WM_MOVE:
         {
             RECT rc;
             GetClientRect(hwnd, &rc);
@@ -132,21 +140,28 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow)
     wc2.hCursor = LoadCursor(NULL, IDC_ARROW);
     RegisterClassW(&wc2);
 
-    // Create windows
-    g_mainHwnd = CreateWindowExW(0, L"MainWindowClass", L"WebView2App - Main",
-                                 WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 800, 600,
-                                 nullptr, nullptr, hInstance, nullptr);
+    // Create main window
+    g_mainHwnd = CreateWindowExW(
+        0,
+        L"MainWindowClass",
+        L"WebView2App - Main",
+        WS_OVERLAPPEDWINDOW,
+        CW_USEDEFAULT, CW_USEDEFAULT,
+        800, 600,
+        nullptr, nullptr, hInstance, nullptr);
+    ShowWindow(g_mainHwnd, nCmdShow);
 
-    // Transparent overlay
+    // Create transparent overlay as topmost layered window
     g_overlayHwnd = CreateWindowExW(
         WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST,
-        L"OverlayWindowClass", nullptr,
-        WS_POPUP | WS_VISIBLE,
-        0, 0, 800, 600,
+        L"OverlayWindowClass",
+        nullptr,
+        WS_POPUP,
+        0, 0, 0, 0,
         nullptr, nullptr, hInstance, nullptr);
     SetLayeredWindowAttributes(g_overlayHwnd, 0, 255, LWA_ALPHA);
+    ShowWindow(g_overlayHwnd, nCmdShow);
 
-    ShowWindow(g_mainHwnd, nCmdShow);
     EnableMouseInPointer(TRUE);
 
     // Initialize WebView2
@@ -181,7 +196,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow)
             }
         ).Get());
 
-    // Message loop
+    // Main message loop
     MSG msg;
     while (GetMessage(&msg, nullptr, 0, 0))
     {
