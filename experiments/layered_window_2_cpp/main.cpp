@@ -1,34 +1,69 @@
+#define UNICODE
 #include <windows.h>
+#include <windowsx.h>
 #include <wrl.h>
 #include <WebView2.h>
-#include <windowsx.h>
-#include <debugapi.h>  // for OutputDebugStringA
+#include <vector>
+#include <mutex>
+#include <stdio.h>
 
 using namespace Microsoft::WRL;
-
-// IDs
-#define ID_OVERLAY 1001
 
 // Globals
 static HWND g_mainHwnd = nullptr;
 static HWND g_overlayHwnd = nullptr;
-static ComPtr<ICoreWebView2Controller> g_webViewController;
-static ComPtr<ICoreWebView2CompositionController> g_compController;
-static ComPtr<ICoreWebView2Environment3> g_env3;
-static bool g_isDrawing = false;
-static POINT g_lastPoint = {};
+static HWND g_webViewHwnd = nullptr;
+static ComPtr<ICoreWebView2Controller> g_controller;
+static ComPtr<ICoreWebView2> g_webview;
 
-// Forward declaration
-void ResizeChildren(RECT const& rc);
+static std::vector<POINT> g_strokePoints;
+static std::mutex g_mutex;
 
-//–– Resize WebView2 & overlay to client area ––
-void ResizeChildren(RECT const& rc)
+// Initialize WebView2
+void InitializeWebView(HWND hwnd)
 {
-    if (g_webViewController)
-    {
-        g_webViewController->put_Bounds(rc);
-    }
+    CreateCoreWebView2EnvironmentWithOptions(
+        nullptr, nullptr, nullptr,
+        Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
+            [&](HRESULT hr, ICoreWebView2Environment* env) -> HRESULT
+            {
+                if (SUCCEEDED(hr) && env)
+                {
+                    env->CreateCoreWebView2Controller(
+                        hwnd,
+                        Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
+                            [&](HRESULT hr2, ICoreWebView2Controller* controller) -> HRESULT
+                            {
+                                if (SUCCEEDED(hr2) && controller)
+                                {
+                                    g_controller = controller;
+                                    g_controller->get_Hwnd(&g_webViewHwnd);
+                                    g_controller->get_CoreWebView2(&g_webview);
 
+                                    // Size to client area
+                                    RECT rc;
+                                    GetClientRect(hwnd, &rc);
+                                    g_controller->put_Bounds(rc);
+
+                                    // Navigate to your local page
+                                    g_webview->Navigate(
+                                        L"file:///C:/Users/ik1ne/Sources/Notetaking/experiments/layered_window_2_cpp/index.html"
+                                    );
+                                }
+                                return S_OK;
+                            }).Get());
+                }
+                return S_OK;
+            }).Get());
+}
+
+// Resize WebView2 and overlay to match main window
+void ResizeChildren(const RECT& rc)
+{
+    if (g_controller)
+    {
+        g_controller->put_Bounds(rc);
+    }
     if (g_overlayHwnd && g_mainHwnd)
     {
         POINT pt{rc.left, rc.top};
@@ -39,11 +74,12 @@ void ResizeChildren(RECT const& rc)
             pt.x, pt.y,
             rc.right - rc.left,
             rc.bottom - rc.top,
-            SWP_NOACTIVATE);
+            SWP_NOACTIVATE
+        );
     }
 }
 
-//–– Main window proc (resize children, quit) ––
+// Main window procedure
 LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch (msg)
@@ -63,207 +99,134 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
-//–– Overlay proc: debug‐draw & inject pen input into WebView2 ––
+// Overlay window procedure for pen drawing and mouse forwarding
 LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
-    switch (msg)
+    if (msg == WM_POINTERDOWN || msg == WM_POINTERUPDATE || msg == WM_POINTERUP)
     {
-    case WM_POINTERDOWN:
-    case WM_POINTERUPDATE:
-    case WM_POINTERUP:
+        UINT32 pid = GET_POINTERID_WPARAM(wParam);
+        POINTER_INPUT_TYPE type;
+        if (SUCCEEDED(GetPointerType(pid, &type)) && type == PT_PEN)
         {
-            // guard COM pointers
-            if (!g_env3)
+            // Record stroke points
+            POINT pt{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+            std::lock_guard<std::mutex> lock(g_mutex);
+            if (msg == WM_POINTERDOWN)
             {
-                OutputDebugStringA("ERROR: g_env3 is null!\n");
-                return 0;
+                g_strokePoints.clear();
+                g_strokePoints.push_back(pt);
+                SetCapture(hwnd);
             }
-            if (!g_compController)
+            else if (msg == WM_POINTERUPDATE)
             {
-                OutputDebugStringA("ERROR: g_compController is null!\n");
-                return 0;
+                g_strokePoints.push_back(pt);
+                InvalidateRect(hwnd, nullptr, FALSE);
             }
-
-            UINT32 pid = GET_POINTERID_WPARAM(wParam);
-            POINTER_INPUT_TYPE type;
-            if (SUCCEEDED(GetPointerType(pid, &type)) && type == PT_PEN)
+            else if (msg == WM_POINTERUP)
             {
-                // debug stroke
-                if (msg == WM_POINTERDOWN)
-                {
-                    g_isDrawing = true;
-                    g_lastPoint.x = GET_X_LPARAM(lParam);
-                    g_lastPoint.y = GET_Y_LPARAM(lParam);
-                    SetCapture(hwnd);
-                }
-                else if (msg == WM_POINTERUPDATE && g_isDrawing)
-                {
-                    POINT pt{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
-                    HDC hdc = GetDC(hwnd);
-                    MoveToEx(hdc, g_lastPoint.x, g_lastPoint.y, nullptr);
-                    LineTo(hdc, pt.x, pt.y);
-                    ReleaseDC(hwnd, hdc);
-                    g_lastPoint = pt;
-                }
-                else if (msg == WM_POINTERUP && g_isDrawing)
-                {
-                    g_isDrawing = false;
-                    ReleaseCapture();
-                }
-
-                // build & send WebView2 pointer event
-                ComPtr<ICoreWebView2PointerInfo> info;
-                HRESULT hr = g_env3->CreateCoreWebView2PointerInfo(&info);
-                if (FAILED(hr) || !info)
-                {
-                    OutputDebugStringA("ERROR: CreateCoreWebView2PointerInfo failed\n");
-                    return 0;
-                }
-
-                info->put_PointerKind(PT_PEN);
-                info->put_PointerId(pid);
-                info->put_PixelLocation({GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)});
-
-                UINT32 flags =
-                    (msg == WM_POINTERDOWN
-                         ? POINTER_FLAG_DOWN
-                         : msg == WM_POINTERUP
-                         ? POINTER_FLAG_UP
-                         : POINTER_FLAG_UPDATE)
-                    | POINTER_FLAG_INRANGE
-                    | (msg != WM_POINTERUP ? POINTER_FLAG_INCONTACT : 0);
-                info->put_PointerFlags(flags);
-                info->put_Time(GetMessageTime());
-
-                COREWEBVIEW2_POINTER_EVENT_KIND kind =
-                (msg == WM_POINTERDOWN
-                     ? COREWEBVIEW2_POINTER_EVENT_KIND_DOWN
-                     : msg == WM_POINTERUPDATE
-                     ? COREWEBVIEW2_POINTER_EVENT_KIND_UPDATE
-                     : COREWEBVIEW2_POINTER_EVENT_KIND_UP);
-
-                g_compController->SendPointerInput(kind, info.Get());
+                ReleaseCapture();
             }
-
-            return 0;
         }
-
-    case WM_PAINT:
+        else
         {
-            PAINTSTRUCT ps;
-            HDC hdc = BeginPaint(hwnd, &ps);
-            HBRUSH brush = CreateSolidBrush(RGB(255, 0, 0));
-            HBRUSH old = (HBRUSH)SelectObject(hdc, brush);
-            Ellipse(hdc, 50, 50, 150, 150);
-            SelectObject(hdc, old);
-            DeleteObject(brush);
-            EndPaint(hwnd, &ps);
-            return 0;
+            // Forward other pointer events as mouse messages
+            if (g_webViewHwnd)
+            {
+                POINTER_INFO pi;
+                if (GetPointerInfo(pid, &pi))
+                {
+                    POINT pt = pi.ptPixelLocation;
+                    ScreenToClient(g_webViewHwnd, &pt);
+                    UINT mouseMsg = 0;
+                    if (pi.pointerFlags & POINTER_FLAG_DOWN) mouseMsg = WM_LBUTTONDOWN;
+                    if (pi.pointerFlags & POINTER_FLAG_UPDATE) mouseMsg = WM_MOUSEMOVE;
+                    if (pi.pointerFlags & POINTER_FLAG_UP) mouseMsg = WM_LBUTTONUP;
+                    if (mouseMsg)
+                    {
+                        SendMessage(g_webViewHwnd, mouseMsg, 0, MAKELPARAM(pt.x, pt.y));
+                    }
+                }
+            }
         }
-
-    case WM_ERASEBKGND:
+        return 0;
+    }
+    if (msg == WM_PAINT)
+    {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hwnd, &ps);
+        HPEN pen = CreatePen(PS_SOLID, 3, RGB(255, 0, 0));
+        HPEN old = (HPEN)SelectObject(hdc, pen);
+        std::lock_guard<std::mutex> lock(g_mutex);
+        for (size_t i = 1; i < g_strokePoints.size(); ++i)
+        {
+            MoveToEx(hdc, g_strokePoints[i - 1].x, g_strokePoints[i - 1].y, nullptr);
+            LineTo(hdc, g_strokePoints[i].x, g_strokePoints[i].y);
+        }
+        SelectObject(hdc, old);
+        DeleteObject(pen);
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+    if (msg == WM_ERASEBKGND)
+    {
         return 1; // prevent flicker
     }
-
     return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
-//–– Entry point: register windows, create overlay & WebView2 ––
-int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow)
+// Entry point
+int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow)
 {
-    // Main window class
+    // Initialize COM for WebView2 and pointer input
+    CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    EnableMouseInPointer(TRUE);
+
+    // Register main window
     WNDCLASSW wc = {};
     wc.lpfnWndProc = MainWndProc;
     wc.hInstance = hInstance;
     wc.lpszClassName = L"MainWindowClass";
-    wc.style = CS_HREDRAW | CS_VREDRAW;
+    wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
     RegisterClassW(&wc);
 
-    // Overlay window class
+    // Register overlay window
     WNDCLASSW wc2 = {};
     wc2.lpfnWndProc = OverlayWndProc;
     wc2.hInstance = hInstance;
     wc2.lpszClassName = L"OverlayWindowClass";
-    wc2.style = CS_HREDRAW | CS_VREDRAW;
     wc2.hCursor = LoadCursor(nullptr, IDC_ARROW);
     RegisterClassW(&wc2);
 
     // Create main window
     g_mainHwnd = CreateWindowExW(
-        0, L"MainWindowClass", L"WebView2App - Main",
+        0, L"MainWindowClass", L"Two-Layer Note-Taking",
         WS_OVERLAPPEDWINDOW,
-        CW_USEDEFAULT, CW_USEDEFAULT, 800, 600,
+        CW_USEDEFAULT, CW_USEDEFAULT,
+        1024, 768,
         nullptr, nullptr, hInstance, nullptr);
     ShowWindow(g_mainHwnd, nCmdShow);
 
-    // Create overlay (must NOT use WS_EX_TRANSPARENT)
+    // Kick off WebView2
+    InitializeWebView(g_mainHwnd);
+
+    // Create overlay (hidden from Alt+Tab)
     g_overlayHwnd = CreateWindowExW(
-        WS_EX_LAYERED | WS_EX_TOPMOST,
+        WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
         L"OverlayWindowClass", nullptr,
         WS_POPUP,
         0, 0, 0, 0,
         nullptr, nullptr, hInstance, nullptr);
-    SetLayeredWindowAttributes(g_overlayHwnd, 0, 255, LWA_ALPHA);
+    // Make nearly transparent
+    SetLayeredWindowAttributes(g_overlayHwnd, 0, 1, LWA_ALPHA);
     ShowWindow(g_overlayHwnd, nCmdShow);
 
-    EnableMouseInPointer(TRUE);
+    // Initial resize
+    RECT rc;
+    GetClientRect(g_mainHwnd, &rc);
+    ResizeChildren(rc);
 
-    // Initialize WebView2
-    CreateCoreWebView2EnvironmentWithOptions(
-        nullptr, nullptr, nullptr,
-        Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
-            [&](HRESULT envRes, ICoreWebView2Environment* env) -> HRESULT
-            {
-                if (SUCCEEDED(envRes) && env)
-                {
-                    // QI for ICoreWebView2Environment3
-                    HRESULT hrEnv3 = env->QueryInterface(IID_PPV_ARGS(&g_env3));
-                    if (FAILED(hrEnv3) || !g_env3)
-                    {
-                        OutputDebugStringA("ERROR: QI for Environment3 failed\n");
-                    }
-
-                    env->CreateCoreWebView2Controller(
-                        g_mainHwnd,
-                        Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
-                            [&](HRESULT ctlRes, ICoreWebView2Controller* controller) -> HRESULT
-                            {
-                                if (SUCCEEDED(ctlRes) && controller)
-                                {
-                                    g_webViewController = controller;
-                                    // QI for CompositionController
-                                    HRESULT hrComp = controller->QueryInterface(IID_PPV_ARGS(&g_compController));
-                                    if (FAILED(hrComp) || !g_compController)
-                                    {
-                                        OutputDebugStringA("ERROR: QI for CompositionController failed\n");
-                                    }
-
-                                    ComPtr<ICoreWebView2> webview;
-                                    controller->get_CoreWebView2(&webview);
-
-                                    RECT rc;
-                                    GetClientRect(g_mainHwnd, &rc);
-                                    ResizeChildren(rc);
-
-                                    webview->Navigate(
-                                        L"file:///C:/Users/ik1ne/Sources/Notetaking/experiments/layered_window_2_cpp/index.html");
-                                }
-                                else
-                                {
-                                    OutputDebugStringA("ERROR: CreateCoreWebView2Controller failed\n");
-                                }
-                                return S_OK;
-                            }).Get());
-                }
-                else
-                {
-                    OutputDebugStringA("ERROR: CreateCoreWebView2Environment failed\n");
-                }
-                return S_OK;
-            }).Get());
-
-    // Message loop
+    // Main message loop
     MSG msg;
     while (GetMessage(&msg, nullptr, 0, 0))
     {
@@ -271,5 +234,6 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow)
         DispatchMessage(&msg);
     }
 
+    CoUninitialize();
     return 0;
 }
