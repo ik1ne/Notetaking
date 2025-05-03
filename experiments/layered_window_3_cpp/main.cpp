@@ -9,17 +9,35 @@
 #include <stdio.h>
 
 #pragma comment(lib, "Shcore.lib")
+#pragma comment(lib, "WebView2Loader.lib")
+
 using namespace Microsoft::WRL;
 
+// -----------------------------------------------------------------------------
 // Globals
+// -----------------------------------------------------------------------------
+static HINSTANCE g_hInst = nullptr;
 static HWND g_mainHwnd = nullptr;
-static HWND g_overlayHwnd = nullptr;
+static HWND g_hCommitted = nullptr;
+static HWND g_hTransient = nullptr;
 static ComPtr<ICoreWebView2Controller> g_controller;
 static ComPtr<ICoreWebView2> g_webview;
-static std::vector<POINT> g_strokePoints;
-static std::mutex g_mutex;
 
-// Create and size WebView2 inside main window
+// Transient stroke state
+static POINT g_lastPoint = {0, 0};
+static bool g_drawing = false;
+
+// -----------------------------------------------------------------------------
+// Forward declarations
+// -----------------------------------------------------------------------------
+LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+LRESULT CALLBACK StrokeWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+void InitializeWebView(HWND hwnd);
+void ResizeOverlays();
+
+// -----------------------------------------------------------------------------
+// Initialize and embed WebView2 (Monaco) into the main window
+// -----------------------------------------------------------------------------
 void InitializeWebView(HWND hwnd)
 {
     CreateCoreWebView2EnvironmentWithOptions(
@@ -38,12 +56,16 @@ void InitializeWebView(HWND hwnd)
                                 {
                                     g_controller = controller;
                                     controller->get_CoreWebView2(&g_webview);
+
+                                    // Resize WebView to fill client area
                                     RECT rc;
                                     GetClientRect(hwnd, &rc);
                                     controller->put_Bounds(rc);
                                     controller->put_IsVisible(TRUE);
+
+                                    // Navigate to local Monaco demo
                                     g_webview->Navigate(
-                                        L"file:///C:/Users/ik1ne/Sources/Notetaking/experiments/layered_window_2_cpp/index.html"
+                                        L"file:///C:/Users/ik1ne/Sources/Notetaking/experiments/layered_window_3_cpp/index.html"
                                     );
                                 }
                                 return S_OK;
@@ -53,219 +75,284 @@ void InitializeWebView(HWND hwnd)
             }).Get());
 }
 
-// Reposition/rescale both WebView2 control and overlay window
-void ResizeChildren(const RECT& rc)
+// -----------------------------------------------------------------------------
+// Resize and align overlay windows over the main client area
+// -----------------------------------------------------------------------------
+void ResizeOverlays()
 {
-    // Resize the WebView2 control to fill client area
+    if (!g_mainHwnd) return;
+
+    RECT rc;
+    GetClientRect(g_mainHwnd, &rc);
+
+    // Resize WebView2 control
     if (g_controller)
     {
         g_controller->put_Bounds(rc);
     }
-    // Position and size the top-level overlay to exactly match the main window's client area
-    if (g_overlayHwnd && g_mainHwnd)
+
+    // Resize committed strokes layer
+    if (g_hCommitted)
     {
-        // Convert client origin (0,0) to screen coordinates
-        POINT origin{rc.left, rc.top};
-        ClientToScreen(g_mainHwnd, &origin);
         SetWindowPos(
-            g_overlayHwnd,
-            HWND_TOPMOST,
-            origin.x,
-            origin.y,
+            g_hCommitted,
+            HWND_TOP,
+            rc.left, rc.top,
             rc.right - rc.left,
             rc.bottom - rc.top,
             SWP_NOACTIVATE
         );
     }
 
-    if (g_overlayHwnd)
+    // Resize transient strokes layer
+    if (g_hTransient)
     {
-        // As a child window, position at 0,0 of parent client
         SetWindowPos(
-            g_overlayHwnd,
+            g_hTransient,
             HWND_TOP,
-            0, 0,
+            rc.left, rc.top,
             rc.right - rc.left,
             rc.bottom - rc.top,
-            SWP_NOACTIVATE);
+            SWP_NOACTIVATE
+        );
     }
 }
 
-// Main window: forward size/move to children
-LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+// -----------------------------------------------------------------------------
+// Window procedure for overlays (handles both committed and transient windows)
+// -----------------------------------------------------------------------------
+LRESULT CALLBACK StrokeWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
-    switch (msg)
-    {
-    case WM_SIZE:
-    case WM_MOVE:
-        {
-            RECT rc;
-            GetClientRect(hwnd, &rc);
-            ResizeChildren(rc);
-            break;
-        }
-    case WM_DESTROY:
-        PostQuitMessage(0);
-        return 0;
-    }
-    return DefWindowProcW(hwnd, msg, wParam, lParam);
-}
+    static HPEN hRedPen = CreatePen(PS_SOLID, 3, RGB(255, 0, 0));
+    static HPEN hBlackPen = CreatePen(PS_SOLID, 3, RGB(0, 0, 0));
 
-// Overlay child window: draw strokes only
-LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
-{
     switch (msg)
     {
     case WM_POINTERDOWN:
-    case WM_POINTERUPDATE:
-    case WM_POINTERUP:
         {
-            UINT32 pid = GET_POINTERID_WPARAM(wParam);
+            UINT32 pid;
             POINTER_INPUT_TYPE type;
+            pid = GET_POINTERID_WPARAM(wParam);
             if (SUCCEEDED(GetPointerType(pid, &type)) && type == PT_PEN)
             {
-                POINTER_INFO pi;
-                if (GetPointerInfo(pid, &pi))
+                // Pen down on transient layer only
+                if (hwnd == g_hTransient)
                 {
-                    POINT pt = pi.ptPixelLocation;
-                    ScreenToClient(hwnd, &pt);
-                    std::lock_guard<std::mutex> lock(g_mutex);
-                    if (msg == WM_POINTERDOWN)
+                    POINTER_INFO pi;
+                    if (GetPointerInfo(pid, &pi))
                     {
-                        g_strokePoints.clear();
-                        g_strokePoints.push_back(pt);
+                        g_drawing = true;
+                        g_lastPoint.x = pi.ptPixelLocation.x;
+                        g_lastPoint.y = pi.ptPixelLocation.y;
                         SetCapture(hwnd);
-                    }
-                    else if (msg == WM_POINTERUPDATE)
-                    {
-                        g_strokePoints.push_back(pt);
-                        InvalidateRect(hwnd, nullptr, FALSE);
-                    }
-                    else
-                    {
-                        ReleaseCapture();
                     }
                 }
             }
             return 0;
         }
-    case WM_LBUTTONDOWN:
-    case WM_MOUSEMOVE:
-    case WM_LBUTTONUP:
+
+    case WM_POINTERUPDATE:
         {
-            bool down = (wParam & MK_LBUTTON) != 0;
-            POINT pt{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
-            std::lock_guard<std::mutex> lock(g_mutex);
-            if (msg == WM_LBUTTONDOWN)
+            if (!g_drawing || hwnd != g_hTransient)
+                break;
+
+            UINT32 pid;
+            POINTER_INPUT_TYPE type;
+            pid = GET_POINTERID_WPARAM(wParam);
+            if (SUCCEEDED(GetPointerType(pid, &type)) && type == PT_PEN)
             {
-                g_strokePoints.clear();
-                g_strokePoints.push_back(pt);
-                SetCapture(hwnd);
-            }
-            else if (msg == WM_MOUSEMOVE && down && GetCapture() == hwnd)
-            {
-                g_strokePoints.push_back(pt);
-                InvalidateRect(hwnd, nullptr, FALSE);
-            }
-            else if (msg == WM_LBUTTONUP)
-            {
-                ReleaseCapture();
+                POINTER_INFO pi;
+                if (GetPointerInfo(pid, &pi))
+                {
+                    POINT pt = {(int)pi.ptPixelLocation.x, (int)pi.ptPixelLocation.y};
+
+                    // Draw on transient layer immediately
+                    HDC hdc = GetDC(hwnd);
+                    SelectObject(hdc, hRedPen);
+                    MoveToEx(hdc, g_lastPoint.x, g_lastPoint.y, nullptr);
+                    LineTo(hdc, pt.x, pt.y);
+                    ReleaseDC(hwnd, hdc);
+
+                    g_lastPoint = pt;
+                }
             }
             return 0;
         }
-    case WM_PAINT:
+
+    case WM_POINTERUP:
         {
-            PAINTSTRUCT ps;
-            HDC hdc = BeginPaint(hwnd, &ps);
-            HPEN pen = CreatePen(PS_SOLID, 3, RGB(255, 0, 0));
-            HPEN old = (HPEN)SelectObject(hdc, pen);
-            std::lock_guard<std::mutex> lock(g_mutex);
-            for (size_t i = 1; i < g_strokePoints.size(); ++i)
+            if (!g_drawing || hwnd != g_hTransient)
+                break;
+
+            UINT32 pid;
+            POINTER_INPUT_TYPE type;
+            pid = GET_POINTERID_WPARAM(wParam);
+            if (SUCCEEDED(GetPointerType(pid, &type)) && type == PT_PEN)
             {
-                MoveToEx(hdc, g_strokePoints[i - 1].x, g_strokePoints[i - 1].y, nullptr);
-                LineTo(hdc, g_strokePoints[i].x, g_strokePoints[i].y);
+                POINTER_INFO pi;
+                if (GetPointerInfo(pid, &pi))
+                {
+                    POINT pt = {(int)pi.ptPixelLocation.x, (int)pi.ptPixelLocation.y};
+
+                    // Finish stroke on transient layer
+                    HDC hdcTop = GetDC(hwnd);
+                    SelectObject(hdcTop, hRedPen);
+                    MoveToEx(hdcTop, g_lastPoint.x, g_lastPoint.y, nullptr);
+                    LineTo(hdcTop, pt.x, pt.y);
+                    ReleaseDC(hwnd, hdcTop);
+
+                    // Commit stroke to committed layer
+                    HDC hdcCommitted = GetDC(g_hCommitted);
+                    SelectObject(hdcCommitted, hBlackPen);
+                    MoveToEx(hdcCommitted, g_lastPoint.x, g_lastPoint.y, nullptr);
+                    LineTo(hdcCommitted, pt.x, pt.y);
+                    ReleaseDC(g_hCommitted, hdcCommitted);
+
+                    // Clear transient layer (fill with transparency key)
+                    RECT rc;
+                    GetClientRect(hwnd, &rc);
+                    HDC hdcClear = GetDC(hwnd);
+                    HBRUSH hKeyBrush = CreateSolidBrush(RGB(1, 0, 0));
+                    FillRect(hdcClear, &rc, hKeyBrush);
+                    DeleteObject(hKeyBrush);
+                    ReleaseDC(hwnd, hdcClear);
+
+                    ReleaseCapture();
+                    g_drawing = false;
+                }
             }
-            SelectObject(hdc, old);
-            DeleteObject(pen);
-            EndPaint(hwnd, &ps);
             return 0;
         }
+
     case WM_ERASEBKGND:
-        return 1; // no background erase
+        // Do nothing to prevent flicker
+        return 1;
     }
-    return DefWindowProcW(hwnd, msg, wParam, lParam);
+    return DefWindowProc(hwnd, msg, wParam, lParam);
 }
 
+// -----------------------------------------------------------------------------
+// Main window procedure (hosts WebView2 and manages overlays)
+// -----------------------------------------------------------------------------
+LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    switch (msg)
+    {
+    case WM_CREATE:
+        {
+            g_mainHwnd = hwnd;
+
+            // Initialize WebView2 (Monaco editor)
+            InitializeWebView(hwnd);
+
+            // Create committed-layer overlay
+            {
+                RECT rc;
+                GetClientRect(hwnd, &rc);
+                g_hCommitted = CreateWindowEx(
+                    WS_EX_LAYERED | WS_EX_NOACTIVATE,
+                    L"StrokeWndClass",
+                    nullptr,
+                    WS_CHILD | WS_VISIBLE,
+                    0, 0,
+                    rc.right - rc.left,
+                    rc.bottom - rc.top,
+                    hwnd,
+                    nullptr,
+                    g_hInst,
+                    nullptr
+                );
+                // Make key color transparent
+                SetLayeredWindowAttributes(g_hCommitted, RGB(1, 0, 0), 0, LWA_COLORKEY);
+            }
+
+            // Create transient-layer overlay
+            {
+                RECT rc;
+                GetClientRect(hwnd, &rc);
+                g_hTransient = CreateWindowEx(
+                    WS_EX_LAYERED | WS_EX_NOACTIVATE,
+                    L"StrokeWndClass",
+                    nullptr,
+                    WS_CHILD | WS_VISIBLE,
+                    0, 0,
+                    rc.right - rc.left,
+                    rc.bottom - rc.top,
+                    hwnd,
+                    nullptr,
+                    g_hInst,
+                    nullptr
+                );
+                // Transparency key
+                SetLayeredWindowAttributes(g_hTransient, RGB(1, 0, 0), 0, LWA_COLORKEY);
+
+                // Register for pen input only
+                RegisterPointerInputTarget(g_hTransient, PT_PEN);
+            }
+
+            break;
+        }
+
+    case WM_SIZE:
+        ResizeOverlays();
+        break;
+
+    case WM_DESTROY:
+        PostQuitMessage(0);
+        break;
+    }
+    return DefWindowProc(hwnd, msg, wParam, lParam);
+}
+
+// -----------------------------------------------------------------------------
 // Entry point
+// -----------------------------------------------------------------------------
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow)
 {
-    // DPI awareness
-    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-    CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-    EnableMouseInPointer(TRUE);
+    g_hInst = hInstance;
 
-    // Register main window
-    WNDCLASSW wc = {};
+    // High-DPI support
+    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    EnableMouseInPointer(TRUE);
+    CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+
+    // Register main window class
+    WNDCLASS wc = {};
     wc.lpfnWndProc = MainWndProc;
     wc.hInstance = hInstance;
     wc.lpszClassName = L"MainWindowClass";
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
-    RegisterClassW(&wc);
+    RegisterClass(&wc);
 
-    // Register overlay as child with transparent background
-    WNDCLASSW wc2 = {};
-    wc2.lpfnWndProc = OverlayWndProc;
+    // Register overlay window class
+    WNDCLASS wc2 = {};
+    wc2.lpfnWndProc = StrokeWndProc;
     wc2.hInstance = hInstance;
-    wc2.lpszClassName = L"OverlayWindowClass";
+    wc2.lpszClassName = L"StrokeWndClass";
     wc2.hCursor = LoadCursor(nullptr, IDC_ARROW);
-    wc2.hbrBackground = nullptr;
-    wc2.style = CS_HREDRAW | CS_VREDRAW;
-    RegisterClassW(&wc2);
+    RegisterClass(&wc2);
 
     // Create main window
-    g_mainHwnd = CreateWindowExW(
-        0, L"MainWindowClass", L"Two-Layer Note-Taking",
+    HWND hwnd = CreateWindowEx(
+        0,
+        L"MainWindowClass",
+        L"Three-Layer Note-Taking Demo",
         WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT,
         1024, 768,
-        nullptr, nullptr, hInstance, nullptr);
-    ShowWindow(g_mainHwnd, nCmdShow);
-
-    // Setup WebView2
-    InitializeWebView(g_mainHwnd);
-
-    // Get the client rectangle for correct overlay dimensions
-    RECT rc;
-    GetClientRect(g_mainHwnd, &rc);
-
-    // Create overlay as a layered top-level window to show strokes over WebView2
-    g_overlayHwnd = CreateWindowExW(
-        WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
-        L"OverlayWindowClass", nullptr,
-        WS_POPUP,
-        0, 0,
-        rc.right - rc.left,
-        rc.bottom - rc.top,
-        nullptr, // no parent
-        nullptr, // no menu
+        nullptr, nullptr,
         hInstance,
-        nullptr // no additional params
+        nullptr
     );
-    // Make black transparent so only strokes show
-    SetLayeredWindowAttributes(g_overlayHwnd, RGB(1, 0, 0), 01, LWA_COLORKEY);
-    ShowWindow(g_overlayHwnd, nCmdShow);
-    // Ensure overlay receives pen and touch input
-    RegisterPointerInputTarget(g_overlayHwnd, PT_PEN);
-    RegisterPointerInputTarget(g_overlayHwnd, PT_TOUCH);
-    RegisterPointerInputTarget(g_overlayHwnd, PT_MOUSE);
 
+    if (!hwnd)
+        return -1;
 
-    // Overlay initially placed and sized; use ResizeChildren for future WM_SIZE/WM_MOVE
-    ResizeChildren(rc);
+    ShowWindow(hwnd, nCmdShow);
+    UpdateWindow(hwnd);
 
-
-    // Run message loop
+    // Message loop
     MSG msg;
     while (GetMessage(&msg, nullptr, 0, 0))
     {
