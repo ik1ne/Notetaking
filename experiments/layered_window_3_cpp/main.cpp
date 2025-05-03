@@ -24,7 +24,7 @@ static ComPtr<ICoreWebView2Controller> g_controller;
 static ComPtr<ICoreWebView2> g_webview;
 
 // Transparency key color (magenta)
-static const COLORREF g_keyColor = RGB(255, 0, 255);
+static const COLORREF g_keyColor = RGB(255, 255, 255);
 
 // Transient stroke state
 static POINT g_lastPoint = {0, 0};
