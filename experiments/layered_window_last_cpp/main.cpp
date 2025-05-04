@@ -1,19 +1,72 @@
 #include <windows.h>
+#include <windowsx.h>
+#include <wrl.h>
+#include <WebView2.h>
+
+#pragma comment(lib, "WebView2Loader.lib")
+
+using namespace Microsoft::WRL;
+
 
 const char* MAIN_CLASS = "MainClass";
 const char* MID_CLASS = "MidClass";
 const char* TOP_CLASS = "TopClass";
 
+
+// globals for WebView2
+static ComPtr<ICoreWebView2Controller> g_controller;
+static ComPtr<ICoreWebView2> g_webview;
+
+// globals for child layers
 static HWND g_midHwnd = nullptr;
 static HWND g_topHwnd = nullptr;
 
-// — Main window proc: create two transparent children on WM_CREATE
+
+// initialize WebView2 in the main window (bottom layer)
+void InitializeWebView(HWND hwnd)
+{
+    CreateCoreWebView2EnvironmentWithOptions(
+        nullptr, nullptr, nullptr,
+        Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
+            [hwnd](HRESULT hr, ICoreWebView2Environment* env) -> HRESULT
+            {
+                if (SUCCEEDED(hr) && env)
+                {
+                    env->CreateCoreWebView2Controller(
+                        hwnd,
+                        Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
+                            [hwnd](HRESULT hr2, ICoreWebView2Controller* controller) -> HRESULT
+                            {
+                                if (SUCCEEDED(hr2) && controller)
+                                {
+                                    g_controller = controller;
+                                    controller->get_CoreWebView2(&g_webview);
+
+                                    RECT rc;
+                                    GetClientRect(hwnd, &rc);
+                                    controller->put_Bounds(rc);
+                                    controller->put_IsVisible(TRUE);
+
+                                    g_webview->Navigate(
+                                        L"file:///C:/Users/ik1ne/Sources/Notetaking/experiments/layered_window_last_cpp/index.html"
+                                    );
+                                }
+                                return S_OK;
+                            }).Get());
+                }
+                return S_OK;
+            }).Get());
+}
+
+// main window proc: create WebView2 + two transparent child layers
 LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg)
     {
     case WM_CREATE:
         {
+            InitializeWebView(hwnd);
+
             RECT rc;
             GetClientRect(hwnd, &rc);
             int w = rc.right, h = rc.bottom;
@@ -107,6 +160,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int nShow)
         CW_USEDEFAULT, CW_USEDEFAULT, 800, 600,
         nullptr, nullptr, hInst, nullptr
     );
+    if (!hwnd) return 0;
+
     ShowWindow(hwnd, nShow);
     UpdateWindow(hwnd);
 
