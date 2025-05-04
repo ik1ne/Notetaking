@@ -15,90 +15,69 @@ static ComPtr<ICoreWebView2> g_webview;
 // Custom message for pointer injection
 constexpr UINT WM_INJECT_POINTER = WM_APP + 1;
 
-// Window procedure: handles our injection message by calling SendPointerInput
+// Window procedure: handles injection message by calling SendPointerInput
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     if (msg == WM_INJECT_POINTER)
     {
-        // lp is the raw ICoreWebView2PointerInfo*
         auto* pInfo = reinterpret_cast<ICoreWebView2PointerInfo*>(lp);
         if (g_compositionController && pInfo)
         {
-            // Inject as a WM_POINTERUPDATE equivalent
             g_compositionController->SendPointerInput(
                 COREWEBVIEW2_POINTER_EVENT_KIND_UPDATE,
                 pInfo);
         }
-        pInfo->Release(); // balance the AddRef in the worker
+        pInfo->Release();
         return 0;
     }
     return DefWindowProc(hwnd, msg, wp, lp);
 }
 
-// Worker thread: creates a pointer-info, AddRef’s it, and posts it to the UI thread
+// Worker thread: creates pointer-info and posts to UI thread
 void InputWorker(DWORD uiThreadId)
 {
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
-    // 1) QI for Environment3
     ComPtr<ICoreWebView2Environment3> env3;
-    HRESULT hrEnv3 = g_env.As(&env3);
-    if (FAILED(hrEnv3) || !env3)
+    if (SUCCEEDED(g_env.As(&env3)))
     {
-        // Environment3 (pointer injection) not supported by this runtime
-        OutputDebugStringW(L"[InputWorker] ICoreWebView2Environment3 not available\n");
-        CoUninitialize();
-        return;
+        ComPtr<ICoreWebView2PointerInfo> pointerInfo;
+        if (SUCCEEDED(env3->CreateCoreWebView2PointerInfo(pointerInfo.GetAddressOf())) && pointerInfo)
+        {
+            pointerInfo->put_PointerKind(PT_PEN);
+            POINT pt{150, 100};
+            pointerInfo->put_PixelLocation(pt);
+            pointerInfo->put_PenPressure(512);
+
+            pointerInfo->AddRef();
+            PostThreadMessage(uiThreadId, WM_INJECT_POINTER, 0,
+                              reinterpret_cast<LPARAM>(pointerInfo.Get()));
+        }
     }
-
-    // 2) Create the pointer‐info correctly
-    ComPtr<ICoreWebView2PointerInfo> pointerInfo;
-    HRESULT hrPtr = env3->CreateCoreWebView2PointerInfo(pointerInfo.GetAddressOf());
-    if (FAILED(hrPtr) || !pointerInfo)
-    {
-        // failed to create pointer info
-        OutputDebugStringW(L"[InputWorker] CreateCoreWebView2PointerInfo failed\n");
-        CoUninitialize();
-        return;
-    }
-
-    // 3) Populate it
-    pointerInfo->put_PointerKind(PT_PEN);
-    POINT pt{150, 100};
-    pointerInfo->put_PixelLocation(pt);
-    pointerInfo->put_PenPressure(512);
-
-    // 4) Marshal it into the UI thread
-    pointerInfo->AddRef();
-    PostThreadMessage(uiThreadId,
-                      WM_INJECT_POINTER,
-                      0,
-                      reinterpret_cast<LPARAM>(pointerInfo.Get()));
 
     CoUninitialize();
 }
 
-
-// Entry point: sets up COM, window, WebView2 CompositionController, then spins a worker
+// Entry point: initialize COM, window, WebView2 env & composition controller,
+// start worker, run message loop
 int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int)
 {
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
-    // 1) Register window class
+    // Register window class
     WNDCLASS wc = {};
     wc.lpfnWndProc = WndProc;
     wc.hInstance = hInst;
     wc.lpszClassName = L"WebView2Compose";
     RegisterClass(&wc);
 
-    // 2) Create window
-    HWND hwnd = CreateWindow(
-        wc.lpszClassName, L"ComposeExample",
-        WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
-        800, 600, nullptr, nullptr, hInst, nullptr);
+    // Create window
+    HWND hwnd = CreateWindow(wc.lpszClassName, L"ComposeExample",
+                             WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 800, 600,
+                             nullptr, nullptr, hInst, nullptr);
     ShowWindow(hwnd, SW_SHOW);
 
-    // 3) Initialize WebView2 environment
+    // Initialize WebView2 environment
     CreateCoreWebView2EnvironmentWithOptions(
         nullptr, nullptr, nullptr,
         Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
@@ -106,33 +85,49 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int)
             {
                 g_env = envRaw;
 
-                // 4) Query for ICoreWebView2Environment3
+                // Query for Environment3
                 ComPtr<ICoreWebView2Environment3> env3;
-                g_env.As(&env3);
+                if (FAILED(g_env.As(&env3)))
+                {
+                    OutputDebugStringW(L"[ComposeExample] Environment3 unavailable\n");
+                    return S_OK;
+                }
 
-                // 5) Create the CompositionController
+                // Create CompositionController
                 env3->CreateCoreWebView2CompositionController(
                     hwnd,
                     Callback<ICoreWebView2CreateCoreWebView2CompositionControllerCompletedHandler>(
                         [hwnd](HRESULT, ICoreWebView2CompositionController* ctrlRaw) -> HRESULT
                         {
                             g_compositionController = ctrlRaw;
-                            // — Build your DirectComposition/WinUI visuals here,
-                            //   then call:
-                            //   g_compositionController->put_RootVisualTarget(dcompVisual.Get());
-                            //   dcompDevice->Commit();
+
+                            // QI to ICoreWebView2Controller to get WebView interface
+                            ComPtr<ICoreWebView2Controller> controller;
+                            if (SUCCEEDED(ctrlRaw->QueryInterface(IID_PPV_ARGS(&controller))) && controller)
+                            {
+                                HRESULT hrWeb = controller->get_CoreWebView2(&g_webview);
+                                if (SUCCEEDED(hrWeb) && g_webview)
+                                {
+                                    g_webview->Navigate(
+                                        L"file:///C:/Users/ik1ne/Sources/Notetaking/"
+                                        L"experiments/layered_window_composition_cpp/index.html");
+                                }
+                            }
+
+                            // TODO: Build and commit your composition tree:
+                            // g_compositionController->put_RootVisualTarget(dcompVisual.Get());
+                            // dcompDevice->Commit();
 
                             return S_OK;
                         }).Get());
-
                 return S_OK;
             }).Get());
 
-    // 6) Launch the input worker
+    // Launch worker thread
     DWORD uiThreadId = GetCurrentThreadId();
     std::thread(InputWorker, uiThreadId).detach();
 
-    // 7) Run the message loop
+    // Message loop
     MSG msg;
     while (GetMessage(&msg, nullptr, 0, 0))
     {
