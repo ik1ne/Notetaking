@@ -4,6 +4,10 @@ const char* MAIN_CLASS = "MainClass";
 const char* MID_CLASS = "MidClass";
 const char* TOP_CLASS = "TopClass";
 
+static HWND g_midHwnd = nullptr;
+static HWND g_topHwnd = nullptr;
+
+// — Main window proc: create two transparent children on WM_CREATE
 LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg)
@@ -12,28 +16,23 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         {
             RECT rc;
             GetClientRect(hwnd, &rc);
-            int w = rc.right;
-            int h = rc.bottom;
+            int w = rc.right, h = rc.bottom;
 
-            // Mid layer: right 2/3
-            CreateWindowEx(
-                0,
-                MID_CLASS, nullptr,
+            // mid: right 2/3
+            g_midHwnd = CreateWindowEx(
+                0, MID_CLASS, nullptr,
                 WS_CHILD | WS_VISIBLE,
-                w / 3, 0, // x = one-third in
-                (w * 2) / 3, h, // width = two-thirds
+                w / 3, 0, (w * 2) / 3, h,
                 hwnd, nullptr,
                 ((LPCREATESTRUCT)lp)->hInstance,
                 nullptr
             );
 
-            // Top layer: left 2/3
-            CreateWindowEx(
-                0,
-                TOP_CLASS, nullptr,
+            // top: left 2/3
+            g_topHwnd = CreateWindowEx(
+                0, TOP_CLASS, nullptr,
                 WS_CHILD | WS_VISIBLE,
-                0, 0, // x = 0
-                (w * 2) / 3, h, // width = two-thirds
+                0, 0, (w * 2) / 3, h,
                 hwnd, nullptr,
                 ((LPCREATESTRUCT)lp)->hInstance,
                 nullptr
@@ -47,49 +46,67 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     return DefWindowProc(hwnd, msg, wp, lp);
 }
 
-LRESULT CALLBACK LayerProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+// — Mid layer proc: fully transparent, hit-test only on painted pixels
+LRESULT CALLBACK MidProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
-    if (msg == WM_PAINT)
+    switch (msg)
     {
-        PAINTSTRUCT ps;
-        HDC hdc = BeginPaint(hwnd, &ps);
-        HBRUSH brush = (HBRUSH)GetClassLongPtr(hwnd, GCLP_HBRBACKGROUND);
-        FillRect(hdc, &ps.rcPaint, brush);
-        EndPaint(hwnd, &ps);
+    case WM_ERASEBKGND:
+        return 1; // suppress background erase → visual transparency
+    case WM_PAINT:
+        BeginPaint(hwnd, nullptr);
+        EndPaint(hwnd, nullptr);
         return 0;
+    case WM_NCHITTEST:
+        // no pixels drawn yet → treat entire window as transparent to input
+        return HTTRANSPARENT;
+    }
+    return DefWindowProc(hwnd, msg, wp, lp);
+}
+
+// — Top layer proc: fully transparent, always click-through
+LRESULT CALLBACK TopProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+{
+    switch (msg)
+    {
+    case WM_ERASEBKGND:
+        return 1; // suppress background erase → visual transparency
+    case WM_PAINT:
+        BeginPaint(hwnd, nullptr);
+        EndPaint(hwnd, nullptr);
+        return 0;
+    case WM_NCHITTEST:
+        // no pixels drawn yet → treat entire window as transparent to input
+        return HTTRANSPARENT;
     }
     return DefWindowProc(hwnd, msg, wp, lp);
 }
 
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int nShow)
 {
-    // Register main window (white background)
     WNDCLASS wc = {};
-    wc.lpfnWndProc = MainProc;
     wc.hInstance = hInst;
+    wc.lpfnWndProc = MainProc;
     wc.lpszClassName = MAIN_CLASS;
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
     RegisterClass(&wc);
 
-    // Register mid layer (dark gray)
-    wc.lpfnWndProc = LayerProc;
+    wc.lpfnWndProc = MidProc;
     wc.lpszClassName = MID_CLASS;
-    wc.hbrBackground = (HBRUSH)GetStockObject(DKGRAY_BRUSH);
+    wc.hbrBackground = nullptr;
     RegisterClass(&wc);
 
-    // Register top layer (light gray)
+    wc.lpfnWndProc = TopProc;
     wc.lpszClassName = TOP_CLASS;
-    wc.hbrBackground = (HBRUSH)GetStockObject(GRAY_BRUSH);
+    wc.hbrBackground = nullptr;
     RegisterClass(&wc);
 
     HWND hwnd = CreateWindowEx(
-        0, MAIN_CLASS, "Three-Layer Debug Example",
+        0, MAIN_CLASS, "Transparent Layers",
         WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT, 800, 600,
         nullptr, nullptr, hInst, nullptr
     );
-    if (!hwnd) return 0;
-
     ShowWindow(hwnd, nShow);
     UpdateWindow(hwnd);
 
