@@ -256,10 +256,14 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow)
     SetLayeredWindowAttributes(g_overlayHwnd, RGB(1, 0, 0), 01, LWA_COLORKEY);
     ShowWindow(g_overlayHwnd, nCmdShow);
     // Ensure overlay receives pen and touch input
-    RegisterPointerInputTarget(g_overlayHwnd, PT_PEN);
-    RegisterPointerInputTarget(g_overlayHwnd, PT_TOUCH);
-    RegisterPointerInputTarget(g_overlayHwnd, PT_MOUSE);
+    auto a = RegisterPointerInputTarget(g_overlayHwnd, PT_PEN);
+    auto b = RegisterPointerInputTarget(g_overlayHwnd, PT_TOUCH);
+    auto c = RegisterPointerInputTarget(g_overlayHwnd, PT_MOUSE);
 
+    if (!a || !b || !c)
+    {
+        return 0;
+    }
 
     // Overlay initially placed and sized; use ResizeChildren for future WM_SIZE/WM_MOVE
     ResizeChildren(rc);
