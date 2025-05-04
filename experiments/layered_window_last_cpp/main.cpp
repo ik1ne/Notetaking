@@ -137,6 +137,8 @@ LRESULT CALLBACK TopProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int nShow)
 {
+    CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+
     WNDCLASS wc = {};
     wc.hInstance = hInst;
     wc.lpfnWndProc = MainProc;
