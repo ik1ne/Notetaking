@@ -3,7 +3,10 @@
 #include <wrl.h>
 #include <WebView2.h>
 #include <WebView2EnvironmentOptions.h>
+#include <dcomp.h>
 #include <thread>
+
+#pragma comment(lib, "dcomp.lib")
 
 using namespace Microsoft::WRL;
 
@@ -101,22 +104,51 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int)
                         {
                             g_compositionController = ctrlRaw;
 
-                            // QI to ICoreWebView2Controller to get WebView interface
+                            // QI to ICoreWebView2Controller
                             ComPtr<ICoreWebView2Controller> controller;
-                            if (SUCCEEDED(ctrlRaw->QueryInterface(IID_PPV_ARGS(&controller))) && controller)
+                            if (FAILED(ctrlRaw->QueryInterface(IID_PPV_ARGS(&controller))))
                             {
-                                HRESULT hrWeb = controller->get_CoreWebView2(&g_webview);
-                                if (SUCCEEDED(hrWeb) && g_webview)
-                                {
-                                    g_webview->Navigate(
-                                        L"file:///C:/Users/ik1ne/Sources/Notetaking/"
-                                        L"experiments/layered_window_composition_cpp/index.html");
-                                }
+                                OutputDebugStringW(L"[ComposeExample] QI for Controller failed\n");
+                                return S_OK;
                             }
 
-                            // TODO: Build and commit your composition tree:
-                            // g_compositionController->put_RootVisualTarget(dcompVisual.Get());
-                            // dcompDevice->Commit();
+                            // Set bounds to fill the window client area
+                            RECT bounds;
+                            GetClientRect(hwnd, &bounds);
+                            controller->put_Bounds(bounds);
+                            controller->put_IsVisible(TRUE);
+
+                            // Obtain ICoreWebView2 and navigate
+                            if (SUCCEEDED(controller->get_CoreWebView2(&g_webview)) && g_webview)
+                            {
+                                // Optionally, add a NavigationCompleted handler
+                                g_webview->add_NavigationCompleted(
+                                    Callback<ICoreWebView2NavigationCompletedEventHandler>(
+                                        [](ICoreWebView2*, ICoreWebView2NavigationCompletedEventArgs* args) -> HRESULT
+                                        {
+                                            BOOL success;
+                                            args->get_IsSuccess(&success);
+                                            OutputDebugStringW(
+                                                success ? L"Navigation Succeeded\n" : L"Navigation Failed\n");
+                                            return S_OK;
+                                        }).Get(), nullptr);
+
+                                g_webview->Navigate(
+                                    L"file:///C:/Users/ik1ne/Sources/Notetaking/"
+                                    L"experiments/layered_window_composition_cpp/index.html");
+                            }
+
+                            // Build and attach composition tree
+                            ComPtr<IDCompositionDevice> dcompDevice;
+                            DCompositionCreateDevice(nullptr, IID_PPV_ARGS(&dcompDevice));
+                            ComPtr<IDCompositionTarget> dcompTarget;
+                            dcompDevice->CreateTargetForHwnd(hwnd, TRUE, &dcompTarget);
+                            ComPtr<IDCompositionVisual> dcompVisual;
+                            dcompDevice->CreateVisual(&dcompVisual);
+
+                            g_compositionController->put_RootVisualTarget(dcompVisual.Get());
+                            dcompTarget->SetRoot(dcompVisual.Get());
+                            dcompDevice->Commit();
 
                             return S_OK;
                         }).Get());
