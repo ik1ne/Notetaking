@@ -1,172 +1,167 @@
-#define UNICODE
 #include <windows.h>
 #include <wrl.h>
-#include <WebView2.h>
-#include <WebView2EnvironmentOptions.h>
+#include <wil/com.h>
 #include <dcomp.h>
-#include <thread>
-
-#pragma comment(lib, "dcomp.lib")
+#include <webview2.h>
+#pragma comment(lib, "dcomp")
+#pragma comment(lib, "WebView2Loader")
 
 using namespace Microsoft::WRL;
 
-// Globals
-static ComPtr<ICoreWebView2Environment> g_env;
-static ComPtr<ICoreWebView2CompositionController> g_compositionController;
-static ComPtr<ICoreWebView2> g_webview;
+// Global pointer to the WebView2 controller
+static wil::com_ptr<ICoreWebView2Controller> webViewController;
 
-// Custom message for pointer injection
-constexpr UINT WM_INJECT_POINTER = WM_APP + 1;
-
-// Window procedure: handles injection message by calling SendPointerInput
-LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+// Window procedure to handle resizing
+LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
-    if (msg == WM_INJECT_POINTER)
+    switch (message)
     {
-        auto* pInfo = reinterpret_cast<ICoreWebView2PointerInfo*>(lp);
-        if (g_compositionController && pInfo)
+    case WM_SIZE:
+        if (webViewController)
         {
-            g_compositionController->SendPointerInput(
-                COREWEBVIEW2_POINTER_EVENT_KIND_UPDATE,
-                pInfo);
+            RECT bounds;
+            GetClientRect(hWnd, &bounds);
+            webViewController->put_Bounds(bounds);
+            webViewController->NotifyParentWindowPositionChanged();
         }
-        pInfo->Release();
+        return 0;
+    case WM_DESTROY:
+        PostQuitMessage(0);
         return 0;
     }
-    return DefWindowProc(hwnd, msg, wp, lp);
+    return DefWindowProc(hWnd, message, wParam, lParam);
 }
 
-// Worker thread: creates pointer-info and posts to UI thread
-void InputWorker(DWORD uiThreadId)
+int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow)
 {
-    CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    CoInitializeEx(NULL, COINIT_APARTMENTTHREADED); // Initialize COM
 
-    ComPtr<ICoreWebView2Environment3> env3;
-    if (SUCCEEDED(g_env.As(&env3)))
-    {
-        ComPtr<ICoreWebView2PointerInfo> pointerInfo;
-        if (SUCCEEDED(env3->CreateCoreWebView2PointerInfo(pointerInfo.GetAddressOf())) && pointerInfo)
-        {
-            pointerInfo->put_PointerKind(PT_PEN);
-            POINT pt{150, 100};
-            pointerInfo->put_PixelLocation(pt);
-            pointerInfo->put_PenPressure(512);
+    // Register a basic window class
+    WNDCLASSEXW wc = {
+        sizeof(WNDCLASSEXW), CS_HREDRAW | CS_VREDRAW, WndProc, 0, 0,
+        hInstance, NULL, NULL, NULL, NULL,
+        L"WebView2CompositionExample", NULL
+    };
+    RegisterClassExW(&wc);
 
-            pointerInfo->AddRef();
-            PostThreadMessage(uiThreadId, WM_INJECT_POINTER, 0,
-                              reinterpret_cast<LPARAM>(pointerInfo.Get()));
-        }
-    }
+    // Create the main window
+    HWND hwnd = CreateWindowW(
+        wc.lpszClassName, L"WebView2 Composition Example",
+        WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 800, 600,
+        NULL, NULL, hInstance, NULL);
+    ShowWindow(hwnd, nCmdShow);
+    UpdateWindow(hwnd);
 
-    CoUninitialize();
-}
-
-// Entry point: initialize COM, window, WebView2 env & composition controller,
-// start worker, run message loop
-int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int)
-{
-    CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-
-    // Register window class
-    WNDCLASS wc = {};
-    wc.lpfnWndProc = WndProc;
-    wc.hInstance = hInst;
-    wc.lpszClassName = L"WebView2Compose";
-    RegisterClass(&wc);
-
-    // Create window
-    HWND hwnd = CreateWindow(wc.lpszClassName, L"ComposeExample",
-                             WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 800, 600,
-                             nullptr, nullptr, hInst, nullptr);
-    ShowWindow(hwnd, SW_SHOW);
-
-    // Initialize WebView2 environment
+    // Create the WebView2 environment and composition controller
     CreateCoreWebView2EnvironmentWithOptions(
         nullptr, nullptr, nullptr,
         Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
-            [hwnd](HRESULT, ICoreWebView2Environment* envRaw) -> HRESULT
+            [hwnd](HRESULT result, ICoreWebView2Environment* env) -> HRESULT
             {
-                g_env = envRaw;
-
-                // Query for Environment3
-                ComPtr<ICoreWebView2Environment3> env3;
-                if (FAILED(g_env.As(&env3)))
+                if (SUCCEEDED(result) && env)
                 {
-                    OutputDebugStringW(L"[ComposeExample] Environment3 unavailable\n");
-                    return S_OK;
-                }
+                    wil::com_ptr<ICoreWebView2Environment3> env3;
+                    if (SUCCEEDED(env->QueryInterface(IID_PPV_ARGS(&env3))) && env3)
+                    {
+                        // Create the composition controller asynchronously
+                        env3->CreateCoreWebView2CompositionController(
+                            hwnd,
+                            Callback<ICoreWebView2CreateCoreWebView2CompositionControllerCompletedHandler>(
+                                [hwnd](HRESULT compResult,
+                                       ICoreWebView2CompositionController* compController) -> HRESULT
+                                {
+                                    if (SUCCEEDED(compResult) && compController)
+                                    {
+                                        // Convert to the basic controller to navigate and size
+                                        compController->QueryInterface(IID_PPV_ARGS(&webViewController));
 
-                // Create CompositionController
-                env3->CreateCoreWebView2CompositionController(
-                    hwnd,
-                    Callback<ICoreWebView2CreateCoreWebView2CompositionControllerCompletedHandler>(
-                        [hwnd](HRESULT, ICoreWebView2CompositionController* ctrlRaw) -> HRESULT
-                        {
-                            g_compositionController = ctrlRaw;
+                                        // Create DirectComposition visuals
+                                        wil::com_ptr<IDCompositionDevice> dcompDevice;
+                                        DCompositionCreateDevice3(nullptr, __uuidof(IDCompositionDevice),
+                                                                  (void**)dcompDevice.put());
+                                        wil::com_ptr<IDCompositionTarget> dcompTarget;
+                                        dcompDevice->CreateTargetForHwnd(hwnd, TRUE, dcompTarget.put());
+                                        wil::com_ptr<IDCompositionVisual> dcompRoot;
+                                        dcompDevice->CreateVisual(dcompRoot.put());
+                                        dcompTarget->SetRoot(dcompRoot.get());
+                                        wil::com_ptr<IDCompositionVisual> dcompWebViewVisual;
+                                        dcompDevice->CreateVisual(dcompWebViewVisual.put());
+                                        dcompRoot->AddVisual(dcompWebViewVisual.get(), TRUE, nullptr);
 
-                            // QI to ICoreWebView2Controller
-                            ComPtr<ICoreWebView2Controller> controller;
-                            if (FAILED(ctrlRaw->QueryInterface(IID_PPV_ARGS(&controller))))
-                            {
-                                OutputDebugStringW(L"[ComposeExample] QI for Controller failed\n");
-                                return S_OK;
-                            }
-
-                            // Set bounds to fill the window client area
-                            RECT bounds;
-                            GetClientRect(hwnd, &bounds);
-                            controller->put_Bounds(bounds);
-                            controller->put_IsVisible(TRUE);
-
-                            // Obtain ICoreWebView2 and navigate
-                            if (SUCCEEDED(controller->get_CoreWebView2(&g_webview)) && g_webview)
-                            {
-                                // Optionally, add a NavigationCompleted handler
-                                g_webview->add_NavigationCompleted(
-                                    Callback<ICoreWebView2NavigationCompletedEventHandler>(
-                                        [](ICoreWebView2*, ICoreWebView2NavigationCompletedEventArgs* args) -> HRESULT
+                                        // Attach the WebView to the composition visual and commit
+                                        compController->put_RootVisualTarget(dcompWebViewVisual.get());
+                                        auto hr2 = dcompDevice->Commit();
+                                        if (FAILED(hr2))
                                         {
-                                            BOOL success;
-                                            args->get_IsSuccess(&success);
+                                            OutputDebugStringW(L"[ERROR] Commit failed\n");
+                                        }
+
+                                        wil::com_ptr<IDCompositionVisual> attachedVisual;
+                                        HRESULT hr = compController->get_RootVisualTarget(
+                                            reinterpret_cast<IUnknown**>(attachedVisual.put())
+                                        );
+                                        if (FAILED(hr) || !attachedVisual)
+                                        {
+                                            OutputDebugStringW(L"[ERROR] RootVisualTarget is NULL or get failed\n");
+                                        }
+                                        else if (attachedVisual.get() != dcompWebViewVisual.get())
+                                        {
+                                            OutputDebugStringW(L"[WARN] Attached visual ≠ your webview visual\n");
+                                        }
+                                        else
+                                        {
                                             OutputDebugStringW(
-                                                success ? L"Navigation Succeeded\n" : L"Navigation Failed\n");
-                                            return S_OK;
-                                        }).Get(), nullptr);
+                                                L"[OK] Composition controller has your WebView visual\n");
+                                        }
 
-                                g_webview->Navigate(
-                                    L"file:///C:/Users/ik1ne/Sources/Notetaking/"
-                                    L"experiments/layered_window_composition_cpp/index.html");
-                            }
+                                        // Navigate to Bing
+                                        wil::com_ptr<ICoreWebView2> coreWebView;
+                                        webViewController->get_CoreWebView2(&coreWebView);
+                                        EventRegistrationToken navToken;
+                                        coreWebView->add_NavigationCompleted(
+                                            Callback<ICoreWebView2NavigationCompletedEventHandler>(
+                                                [](ICoreWebView2* /*sender*/,
+                                                   ICoreWebView2NavigationCompletedEventArgs* args) -> HRESULT
+                                                {
+                                                    BOOL isSuccess = FALSE;
+                                                    args->get_IsSuccess(&isSuccess);
+                                                    if (!isSuccess)
+                                                    {
+                                                        COREWEBVIEW2_WEB_ERROR_STATUS status;
+                                                        args->get_WebErrorStatus(&status);
+                                                        wchar_t buf[128];
+                                                        swprintf_s(buf, L"Navigation failed: error %d\n", (int)status);
+                                                        OutputDebugStringW(buf);
+                                                    }
+                                                    else
+                                                    {
+                                                        OutputDebugStringW(L"NavigationCompleted: success\n");
+                                                    }
+                                                    return S_OK;
+                                                }).Get(), &navToken);
+                                        coreWebView->Navigate(L"https://www.bing.com");
 
-                            // Build and attach composition tree
-                            ComPtr<IDCompositionDevice> dcompDevice;
-                            DCompositionCreateDevice(nullptr, IID_PPV_ARGS(&dcompDevice));
-                            ComPtr<IDCompositionTarget> dcompTarget;
-                            dcompDevice->CreateTargetForHwnd(hwnd, TRUE, &dcompTarget);
-                            ComPtr<IDCompositionVisual> dcompVisual;
-                            dcompDevice->CreateVisual(&dcompVisual);
-
-                            g_compositionController->put_RootVisualTarget(dcompVisual.Get());
-                            dcompTarget->SetRoot(dcompVisual.Get());
-                            dcompDevice->Commit();
-
-                            return S_OK;
-                        }).Get());
+                                        // Resize the WebView to fill the window
+                                        RECT bounds;
+                                        GetClientRect(hwnd, &bounds);
+                                        webViewController->put_Bounds(bounds);
+                                        webViewController->put_IsVisible(TRUE);
+                                        webViewController->NotifyParentWindowPositionChanged();
+                                    }
+                                    return S_OK;
+                                }).Get());
+                    }
+                }
                 return S_OK;
             }).Get());
 
-    // Launch worker thread
-    DWORD uiThreadId = GetCurrentThreadId();
-    std::thread(InputWorker, uiThreadId).detach();
-
-    // Message loop
+    // Standard message loop
     MSG msg;
-    while (GetMessage(&msg, nullptr, 0, 0))
+    while (GetMessage(&msg, NULL, 0, 0))
     {
         TranslateMessage(&msg);
         DispatchMessage(&msg);
     }
-
     CoUninitialize();
     return 0;
 }

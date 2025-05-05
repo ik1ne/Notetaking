@@ -4,6 +4,7 @@ project(WebView2AppComposition)
 set(CMAKE_CXX_STANDARD 17)
 
 include_directories("../microsoft.web.webview2.1.0.3230-prerelease/build/native/include")
+include_directories("../Microsoft.Windows.ImplementationLibrary.1.0.250325.1/include")
 link_directories("../microsoft.web.webview2.1.0.3230-prerelease/build/native/x64")
 
 add_executable(WebView2AppComposition main.cpp)
