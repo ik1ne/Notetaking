@@ -8,7 +8,7 @@ include_directories("../Microsoft.Windows.ImplementationLibrary.1.0.250325.1/inc
 link_directories("../microsoft.web.webview2.1.0.3230-prerelease/build/native/x64")
 
 add_executable(WebView2AppComposition main.cpp)
-target_link_libraries(WebView2AppComposition WebView2Loader ole32 user32)
+target_link_libraries(WebView2AppComposition WebView2Loader ole32 user32 coremessaging)
 target_link_options(WebView2AppComposition PRIVATE /SUBSYSTEM:WINDOWS)
 add_custom_command(TARGET WebView2AppComposition POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
