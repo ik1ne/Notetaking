@@ -8,6 +8,7 @@
 #include <WebView2.h>
 #include <WebView2EnvironmentOptions.h>
 #include <DispatcherQueue.h>
+#include <windowsx.h>
 
 using namespace Microsoft::WRL;
 using namespace winrt;
@@ -16,6 +17,7 @@ using namespace winrt::Windows::UI::Composition::Desktop;
 
 
 static wil::com_ptr<ICoreWebView2Controller> g_controller;
+static wil::com_ptr<ICoreWebView2CompositionController> g_compController;
 static wil::com_ptr<ICoreWebView2> g_webview;
 
 
@@ -26,6 +28,22 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch (msg)
     {
+    case WM_MOUSEMOVE:
+    case WM_LBUTTONDOWN:
+    case WM_LBUTTONUP:
+    case WM_RBUTTONDOWN:
+    case WM_RBUTTONUP:
+    case WM_MOUSEWHEEL:
+        if (g_compController)
+        {
+            POINT pt = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+            g_compController->SendMouseInput(
+                static_cast<COREWEBVIEW2_MOUSE_EVENT_KIND>(msg),
+                static_cast<COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS>(GET_KEYSTATE_WPARAM(wParam)),
+                GET_WHEEL_DELTA_WPARAM(wParam), pt);
+        }
+        return 0;
+
     case WM_DESTROY:
         PostQuitMessage(0);
         return 0;
@@ -118,6 +136,21 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow)
                                                              HRESULT result,
                                                              ICoreWebView2CompositionController* controller) -> HRESULT
                                                              {
+                                                                 g_compController = controller;
+                                                                 EventRegistrationToken token;
+                                                                 g_compController->add_CursorChanged(
+                                                                     Callback<ICoreWebView2CursorChangedEventHandler>(
+                                                                         [](ICoreWebView2CompositionController* sender,
+                                                                            IUnknown*) -> HRESULT
+                                                                         {
+                                                                             HCURSOR cursor;
+                                                                             sender->get_Cursor(&cursor);
+                                                                             SetCursor(cursor);
+                                                                             return S_OK;
+                                                                         }).Get(),
+                                                                     &token);
+
+
                                                                  if (FAILED(result) || !controller)
                                                                  {
                                                                      ShowErrorBox(
