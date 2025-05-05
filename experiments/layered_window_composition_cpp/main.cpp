@@ -113,80 +113,81 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow)
     target.Root(root);
 
     // Async WebView2 creation
-    CreateCoreWebView2EnvironmentWithOptions(nullptr, nullptr, nullptr,
-                                             Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
-                                                 [hwnd, compositor, root](
-                                                 HRESULT result, ICoreWebView2Environment* env) -> HRESULT
-                                                 {
-                                                     if (FAILED(result) || !env)
-                                                     {
-                                                         ShowErrorBox(L"WebView2 environment creation failed", result);
-                                                         PostQuitMessage(-1);
-                                                         return result;
-                                                     }
+    CreateCoreWebView2EnvironmentWithOptions(
+        nullptr, nullptr, nullptr,
+        Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
+            [hwnd, compositor, root](
+            HRESULT result, ICoreWebView2Environment* env) -> HRESULT
+            {
+                if (FAILED(result) || !env)
+                {
+                    ShowErrorBox(L"WebView2 environment creation failed", result);
+                    PostQuitMessage(-1);
+                    return result;
+                }
 
-                                                     wil::com_ptr<ICoreWebView2Environment3> env3;
-                                                     env->QueryInterface(IID_PPV_ARGS(&env3));
+                wil::com_ptr<ICoreWebView2Environment3> env3;
+                env->QueryInterface(IID_PPV_ARGS(&env3));
 
-                                                     env3->CreateCoreWebView2CompositionController(
-                                                         hwnd,
-                                                         Callback<
-                                                             ICoreWebView2CreateCoreWebView2CompositionControllerCompletedHandler>(
-                                                             [hwnd, compositor, root](
-                                                             HRESULT result,
-                                                             ICoreWebView2CompositionController* controller) -> HRESULT
-                                                             {
-                                                                 g_compController = controller;
-                                                                 EventRegistrationToken token;
-                                                                 g_compController->add_CursorChanged(
-                                                                     Callback<ICoreWebView2CursorChangedEventHandler>(
-                                                                         [](ICoreWebView2CompositionController* sender,
-                                                                            IUnknown*) -> HRESULT
-                                                                         {
-                                                                             HCURSOR cursor;
-                                                                             sender->get_Cursor(&cursor);
-                                                                             SetCursor(cursor);
-                                                                             return S_OK;
-                                                                         }).Get(),
-                                                                     &token);
+                env3->CreateCoreWebView2CompositionController(
+                    hwnd,
+                    Callback<
+                        ICoreWebView2CreateCoreWebView2CompositionControllerCompletedHandler>(
+                        [hwnd, compositor, root](
+                        HRESULT result,
+                        ICoreWebView2CompositionController* controller) -> HRESULT
+                        {
+                            g_compController = controller;
+                            EventRegistrationToken token;
+                            g_compController->add_CursorChanged(
+                                Callback<ICoreWebView2CursorChangedEventHandler>(
+                                    [](ICoreWebView2CompositionController* sender,
+                                       IUnknown*) -> HRESULT
+                                    {
+                                        HCURSOR cursor;
+                                        sender->get_Cursor(&cursor);
+                                        SetCursor(cursor);
+                                        return S_OK;
+                                    }).Get(),
+                                &token);
 
 
-                                                                 if (FAILED(result) || !controller)
-                                                                 {
-                                                                     ShowErrorBox(
-                                                                         L"Composition controller creation failed",
-                                                                         result);
-                                                                     PostQuitMessage(-1);
-                                                                     return result;
-                                                                 }
+                            if (FAILED(result) || !controller)
+                            {
+                                ShowErrorBox(
+                                    L"Composition controller creation failed",
+                                    result);
+                                PostQuitMessage(-1);
+                                return result;
+                            }
 
-                                                                 // Query for base controller and webview
-                                                                 controller->QueryInterface(
-                                                                     IID_PPV_ARGS(&g_controller));
+                            // Query for base controller and webview
+                            controller->QueryInterface(
+                                IID_PPV_ARGS(&g_controller));
 
-                                                                 g_controller->get_CoreWebView2(&g_webview);
+                            g_controller->get_CoreWebView2(&g_webview);
 
-                                                                 // Show, bind, navigate
-                                                                 g_controller->put_IsVisible(TRUE);
+                            // Show, bind, navigate
+                            g_controller->put_IsVisible(TRUE);
 
-                                                                 auto webviewVisual = compositor.
-                                                                     CreateContainerVisual();
-                                                                 root.Children().InsertAtTop(webviewVisual);
-                                                                 controller->put_RootVisualTarget(
-                                                                     webviewVisual.as<IUnknown>().get());
+                            auto webviewVisual = compositor.
+                                CreateContainerVisual();
+                            root.Children().InsertAtTop(webviewVisual);
+                            controller->put_RootVisualTarget(
+                                webviewVisual.as<IUnknown>().get());
 
-                                                                 RECT bounds;
-                                                                 GetClientRect(hwnd, &bounds);
-                                                                 g_controller->put_Bounds(bounds);
+                            RECT bounds;
+                            GetClientRect(hwnd, &bounds);
+                            g_controller->put_Bounds(bounds);
 
-                                                                 g_webview->Navigate(L"https://www.bing.com");
-                                                                 PostMessage(hwnd, WM_SIZE, 0, 0);
+                            g_webview->Navigate(L"https://www.bing.com");
+                            PostMessage(hwnd, WM_SIZE, 0, 0);
 
-                                                                 return S_OK;
-                                                             }).Get());
+                            return S_OK;
+                        }).Get());
 
-                                                     return S_OK;
-                                                 }).Get());
+                return S_OK;
+            }).Get());
 
     // Main loop
     MSG msg;
