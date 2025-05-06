@@ -1,14 +1,12 @@
 #define UNICODE
 #include <windows.h>
-#include <wrl.h>
-#include <wil/com.h>
-#include <winrt/Windows.System.h>
+#include <windowsx.h>
 #include <winrt/Windows.UI.Composition.Desktop.h>
 #include <windows.ui.composition.interop.h>
 #include <WebView2.h>
 #include <WebView2EnvironmentOptions.h>
 #include <DispatcherQueue.h>
-#include <windowsx.h>
+#include <wrl/event.h>
 
 using namespace Microsoft::WRL;
 using namespace winrt;
@@ -16,9 +14,9 @@ using namespace winrt::Windows::UI::Composition;
 using namespace winrt::Windows::UI::Composition::Desktop;
 
 
-static wil::com_ptr<ICoreWebView2Controller> g_controller;
-static wil::com_ptr<ICoreWebView2CompositionController> g_compController;
-static wil::com_ptr<ICoreWebView2> g_webview;
+static com_ptr<ICoreWebView2Controller> g_controller;
+static com_ptr<ICoreWebView2CompositionController> g_compController;
+static com_ptr<ICoreWebView2> g_webview;
 
 
 // Constants
@@ -71,7 +69,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow)
 
     // Create window
     HWND hwnd = CreateWindowExW(
-        WS_EX_LAYERED, CLASS_NAME, L"WebView2 with Composition", WS_OVERLAPPEDWINDOW,
+        0, CLASS_NAME, L"WebView2 with Composition", WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT, 800, 600,
         nullptr, nullptr, hInstance, nullptr);
     if (!hwnd) return -1;
@@ -126,7 +124,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow)
                     return result;
                 }
 
-                wil::com_ptr<ICoreWebView2Environment3> env3;
+                com_ptr<ICoreWebView2Environment3> env3;
                 env->QueryInterface(IID_PPV_ARGS(&env3));
 
                 env3->CreateCoreWebView2CompositionController(
@@ -137,7 +135,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow)
                         HRESULT result,
                         ICoreWebView2CompositionController* controller) -> HRESULT
                         {
-                            g_compController = controller;
+                            g_compController.copy_from(controller);
                             EventRegistrationToken token;
                             g_compController->add_CursorChanged(
                                 Callback<ICoreWebView2CursorChangedEventHandler>(
@@ -165,7 +163,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow)
                             controller->QueryInterface(
                                 IID_PPV_ARGS(&g_controller));
 
-                            g_controller->get_CoreWebView2(&g_webview);
+                            g_controller->get_CoreWebView2(g_webview.put());
 
                             // Show, bind, navigate
                             g_controller->put_IsVisible(TRUE);
