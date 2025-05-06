@@ -1,13 +1,16 @@
 use anyhow::{Result, anyhow, bail};
+use std::cell::RefCell;
 use std::sync::mpsc;
-use webview2_com::CreateCoreWebView2EnvironmentCompletedHandler;
 use webview2_com::Microsoft::Web::WebView2::Win32::{
-    CreateCoreWebView2Environment, CreateCoreWebView2EnvironmentWithOptions,
-    ICoreWebView2CreateCoreWebView2CompositionControllerCompletedHandler,
+    CreateCoreWebView2Environment, ICoreWebView2CompositionController, ICoreWebView2Controller,
     ICoreWebView2Environment3,
 };
+use webview2_com::{
+    CreateCoreWebView2CompositionControllerCompletedHandler,
+    CreateCoreWebView2EnvironmentCompletedHandler, CursorChangedEventHandler,
+};
+use windows::UI::Color;
 use windows::UI::Composition::Compositor;
-use windows::UI::Composition::Desktop::DesktopWindowTarget;
 use windows::Win32::Foundation::{E_POINTER, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -16,12 +19,16 @@ use windows::Win32::System::WinRT::{
     CreateDispatcherQueueController, DQTAT_COM_ASTA, DQTYPE_THREAD_CURRENT, DispatcherQueueOptions,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, MSG,
-    PostQuitMessage, RegisterClassW, SW_SHOW, ShowWindow, TranslateMessage, WINDOW_EX_STYLE,
-    WM_DESTROY, WM_QUIT, WNDCLASSW, WS_OVERLAPPEDWINDOW,
+    CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW,
+    HCURSOR, MSG, PostMessageW, PostQuitMessage, RegisterClassW, SW_SHOW, SetCursor, ShowWindow,
+    TranslateMessage, WINDOW_EX_STYLE, WM_DESTROY, WM_SIZE, WNDCLASSW, WS_OVERLAPPEDWINDOW,
 };
 use windows::core::{Interface, PCWSTR, w};
 use windows_numerics::{Vector2, Vector3};
+
+thread_local! {
+    static COMPOSITION_CONTROLLER: RefCell<Option<ICoreWebView2CompositionController>> = RefCell::new(None);
+}
 
 const MAIN_CLASS_NAME: PCWSTR = w!("MainClass");
 
@@ -72,6 +79,7 @@ fn main() -> Result<()> {
         let root = compositor.CreateContainerVisual()?;
         root.SetRelativeSizeAdjustment(Vector2::one())?;
         root.SetOffset(Vector3::zero())?;
+        target.SetRoot(&root)?;
 
         let environment = {
             let (tx, rx) = mpsc::channel();
@@ -95,7 +103,68 @@ fn main() -> Result<()> {
 
         let env3: ICoreWebView2Environment3 = environment.cast()?;
 
-        // TODO
+        let comp_controller = {
+            let (tx, rx) = mpsc::channel();
+            CreateCoreWebView2CompositionControllerCompletedHandler::wait_for_async_operation(
+                Box::new(move |handler| {
+                    env3.CreateCoreWebView2CompositionController(hwnd, &handler)
+                        .map_err(webview2_com::Error::WindowsError)
+                }),
+                Box::new(move |error_code, controller| {
+                    error_code?;
+                    tx.send(controller.ok_or(windows::core::Error::from(E_POINTER)))
+                        .unwrap();
+                    Ok(())
+                }),
+            )
+            .map_err(|_| anyhow!("CreateCoreWebView2CompositionController failed"))?;
+
+            rx.recv().unwrap()?
+        };
+
+        COMPOSITION_CONTROLLER.replace(Some(comp_controller.clone()));
+
+        let mut _token = 0;
+
+        comp_controller.add_CursorChanged(
+            &CursorChangedEventHandler::create(Box::new(move |sender, _unknown| {
+                let Some(sender) = sender else { return Ok(()) };
+                let mut cursor = HCURSOR::default();
+                sender.Cursor(&mut cursor)?;
+
+                SetCursor(Some(cursor));
+
+                Ok(())
+            })),
+            &mut _token,
+        )?;
+
+        let webview_controller: ICoreWebView2Controller = comp_controller.cast()?;
+        webview_controller.SetIsVisible(true)?;
+        let webview_visual = compositor.CreateContainerVisual()?;
+        root.Children()?.InsertAtTop(&webview_visual)?;
+        let overlay_visual = compositor.CreateSpriteVisual()?;
+        let brush = compositor.CreateColorBrush()?;
+        brush.SetColor(Color {
+            A: 0x00,
+            R: 0x00,
+            G: 0x00,
+            B: 0x00,
+        })?;
+        overlay_visual.SetBrush(&brush)?;
+        overlay_visual.SetRelativeSizeAdjustment(Vector2::one())?;
+        root.Children()?.InsertAtTop(&overlay_visual)?;
+
+        comp_controller.SetRootVisualTarget(&webview_visual)?;
+
+        let mut bounds = Default::default();
+        GetClientRect(hwnd, &mut bounds)?;
+        webview_controller.SetBounds(bounds)?;
+        webview_controller
+            .CoreWebView2()?
+            .Navigate(w!("https://www.google.com"))?;
+
+        PostMessageW(Some(hwnd), WM_SIZE, WPARAM(0), LPARAM(0))?;
 
         let mut msg: MSG = Default::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {

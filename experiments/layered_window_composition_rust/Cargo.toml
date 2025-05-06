@@ -18,4 +18,5 @@ features = [
 [dependencies]
 anyhow = "1"
 windows-numerics = "0.2"
+winapi = "0.3"
 webview2-com = { version = "0.37" }
