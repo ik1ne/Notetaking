@@ -71,7 +71,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow)
 
     // Create window
     HWND hwnd = CreateWindowExW(
-        0, CLASS_NAME, L"WebView2 with Composition", WS_OVERLAPPEDWINDOW,
+        WS_EX_LAYERED, CLASS_NAME, L"WebView2 with Composition", WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT, 800, 600,
         nullptr, nullptr, hInstance, nullptr);
     if (!hwnd) return -1;
@@ -173,6 +173,13 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow)
                             auto webviewVisual = compositor.
                                 CreateContainerVisual();
                             root.Children().InsertAtTop(webviewVisual);
+                            auto overlayVisual = compositor.CreateSpriteVisual();
+                            overlayVisual.Brush(
+                                compositor.CreateColorBrush(winrt::Windows::UI::Color{0x00, 0x00, 0x00, 0x00}));
+                            // fully transparent
+                            overlayVisual.RelativeSizeAdjustment({1.0f, 1.0f});
+                            root.Children().InsertAtTop(overlayVisual); // place above webviewVisual
+
                             controller->put_RootVisualTarget(
                                 webviewVisual.as<IUnknown>().get());
 
