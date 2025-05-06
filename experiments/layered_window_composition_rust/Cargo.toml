@@ -3,7 +3,19 @@ name = "layered_window_composition_rust"
 version = "0.1.0"
 edition = "2024"
 
+
+[dependencies.windows]
+version = "0.61"
+features = [
+    "System",
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
+    "Win32_System_WinRT_Composition",
+    "UI_Composition",
+    "UI_Composition_Desktop"
+]
+
 [dependencies]
+anyhow = "1"
+windows-numerics = "0.2"
 webview2-com = { version = "0.37" }
-webview2-com-sys = { version = "0.37" }
-webview2-com-macros = { version = "0.8" }
