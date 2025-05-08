@@ -2,6 +2,7 @@ use anyhow::{Result, anyhow, bail};
 use std::cell::RefCell;
 use std::sync::mpsc;
 use webview2_com::Microsoft::Web::WebView2::Win32::{
+    COREWEBVIEW2_MOUSE_EVENT_KIND, COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS,
     CreateCoreWebView2Environment, ICoreWebView2CompositionController, ICoreWebView2Controller,
     ICoreWebView2Environment3,
 };
@@ -9,10 +10,13 @@ use webview2_com::{
     CreateCoreWebView2CompositionControllerCompletedHandler,
     CreateCoreWebView2EnvironmentCompletedHandler, CursorChangedEventHandler,
 };
+use winapi::shared::windef::LPPOINT;
+use winapi::shared::windowsx::{GET_X_LPARAM, GET_Y_LPARAM};
+use winapi::um::winuser::{GET_KEYSTATE_WPARAM, GET_WHEEL_DELTA_WPARAM, ScreenToClient};
 use windows::UI::Color;
 use windows::UI::Composition::Compositor;
-use windows::Win32::Foundation::{E_POINTER, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
-use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
+use windows::Win32::Foundation::{E_POINTER, HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::WinRT::Composition::ICompositorDesktopInterop;
 use windows::Win32::System::WinRT::{
@@ -21,7 +25,8 @@ use windows::Win32::System::WinRT::{
 use windows::Win32::UI::WindowsAndMessaging::{
     CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW,
     HCURSOR, MSG, PostMessageW, PostQuitMessage, RegisterClassW, SW_SHOW, SetCursor, ShowWindow,
-    TranslateMessage, WINDOW_EX_STYLE, WM_DESTROY, WM_SIZE, WNDCLASSW, WS_OVERLAPPEDWINDOW,
+    TranslateMessage, WINDOW_EX_STYLE, WM_DESTROY, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+    WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SIZE, WNDCLASSW, WS_OVERLAPPEDWINDOW,
 };
 use windows::core::{Interface, PCWSTR, w};
 use windows_numerics::{Vector2, Vector3};
@@ -162,7 +167,7 @@ fn main() -> Result<()> {
         webview_controller.SetBounds(bounds)?;
         webview_controller
             .CoreWebView2()?
-            .Navigate(w!("https://www.google.com"))?;
+            .Navigate(w!("https://www.bing.com"))?;
 
         PostMessageW(Some(hwnd), WM_SIZE, WPARAM(0), LPARAM(0))?;
 
@@ -171,24 +176,43 @@ fn main() -> Result<()> {
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
+
+        CoUninitialize();
     };
 
     Ok(())
 }
 
-extern "system" fn main_proc(
-    window: HWND,
-    message: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
-    unsafe {
-        match message {
-            WM_DESTROY => {
-                PostQuitMessage(0);
-                LRESULT(0)
+extern "system" fn main_proc(mut hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    match msg {
+        WM_MOUSEMOVE | WM_LBUTTONDOWN | WM_LBUTTONUP | WM_RBUTTONDOWN | WM_RBUTTONUP
+        | WM_MOUSEWHEEL => {
+            let x = GET_X_LPARAM(lparam.0);
+            let y = GET_Y_LPARAM(lparam.0);
+            let mut pt = POINT { x, y };
+            unsafe {
+                ScreenToClient(&mut hwnd as *mut _ as _, &mut pt as *mut _ as _);
             }
-            _ => DefWindowProcW(window, message, wparam, lparam),
+
+            let kind = COREWEBVIEW2_MOUSE_EVENT_KIND(msg as i32);
+            let virtual_keys =
+                COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS(GET_KEYSTATE_WPARAM(wparam.0).into());
+            let wheel = GET_WHEEL_DELTA_WPARAM(wparam.0);
+
+            // 3. Forward to WebView2 CompositionController
+            COMPOSITION_CONTROLLER.with(|cell| {
+                if let Some(ctrl) = &*cell.borrow() {
+                    let _ = unsafe { ctrl.SendMouseInput(kind, virtual_keys, wheel as u32, pt) };
+                }
+            });
+
+            // We handled it
+            LRESULT(0)
         }
+        WM_DESTROY => unsafe {
+            PostQuitMessage(0);
+            LRESULT(0)
+        },
+        _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
     }
 }
