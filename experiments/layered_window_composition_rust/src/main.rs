@@ -24,9 +24,10 @@ use windows::Win32::System::WinRT::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW,
-    HCURSOR, MSG, PostMessageW, PostQuitMessage, RegisterClassW, SW_SHOW, SetCursor, ShowWindow,
-    TranslateMessage, WINDOW_EX_STYLE, WM_DESTROY, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
-    WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SIZE, WNDCLASSW, WS_OVERLAPPEDWINDOW,
+    HCURSOR, HTCLIENT, MSG, PostMessageW, PostQuitMessage, RegisterClassW, SW_SHOW, SetCursor,
+    ShowWindow, TranslateMessage, WINDOW_EX_STYLE, WM_DESTROY, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SIZE, WNDCLASSW,
+    WS_OVERLAPPEDWINDOW,
 };
 use windows::core::{Interface, PCWSTR, w};
 use windows_numerics::{Vector2, Vector3};
@@ -209,6 +210,26 @@ extern "system" fn main_proc(mut hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
             // We handled it
             LRESULT(0)
         }
+        WM_SETCURSOR => unsafe {
+            let hit_test = (lparam.0 as u32) & 0xffff;
+            if hit_test == HTCLIENT {
+                unsafe {
+                    // Try to get the cursor from WebView
+                    let mut cursor: HCURSOR = std::mem::zeroed();
+                    COMPOSITION_CONTROLLER.with(|cell| {
+                        let Some(ctrl) = &*cell.borrow() else { return };
+                        let mut cursor = HCURSOR::default();
+                        if ctrl.Cursor(&mut cursor as _).is_err() {
+                            println!("Cursor not found");
+                        }
+                        SetCursor(Some(cursor));
+                    });
+                }
+                // We handled it
+                return LRESULT(1);
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        },
         WM_DESTROY => unsafe {
             PostQuitMessage(0);
             LRESULT(0)
