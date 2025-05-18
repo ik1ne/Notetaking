@@ -1,7 +1,0 @@
-[package]
-name = "stylus_logger"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-windows = { version = "0.61.1", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_Pointer", "Win32_Graphics_Gdi", "Win32_System", "Win32_System_LibraryLoader"] }
