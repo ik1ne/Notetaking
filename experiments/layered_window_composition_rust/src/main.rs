@@ -152,13 +152,21 @@ fn main() -> Result<()> {
         let overlay_visual = compositor.CreateSpriteVisual()?;
         let brush = compositor.CreateColorBrush()?;
         brush.SetColor(Color {
-            A: 0x00,
-            R: 0x00,
-            G: 0x00,
-            B: 0x00,
+            A: 255, // semi-transparent
+            R: 255,
+            G: 0,
+            B: 0,
         })?;
+
         overlay_visual.SetBrush(&brush)?;
-        overlay_visual.SetRelativeSizeAdjustment(Vector2::one())?;
+        // Set absolute size and position for the colored rectangle
+        overlay_visual.SetSize(Vector2 { X: 200.0, Y: 200.0 })?;
+        overlay_visual.SetOffset(Vector3 {
+            X: 0.0,
+            Y: 0.0,
+            Z: 0.0,
+        })?;
+
         root.Children()?.InsertAtTop(&overlay_visual)?;
 
         comp_controller.SetRootVisualTarget(&webview_visual)?;
