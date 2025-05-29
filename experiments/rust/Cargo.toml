@@ -2,4 +2,5 @@
 resolver = "3"
 members = [
     "layered_window_composition_rust",
+    "poll_rate_checker",
 ]

@@ -1,0 +1,117 @@
+Samples: 1534
+Average rate: 291.30 Hz
+Min rate:     33.17 Hz
+Max rate:     890.95 Hz
+Median rate:  271.47 Hz
+Std dev:      104.41 Hz
+-----
+Samples:          1534
+Average latency:  4.0792 ms
+Min latency:      1.1224 ms
+Max latency:      30.1439 ms
+Median latency:   3.6837 ms
+Std dev latency:  2.3476 ms
+-----
+Threshold: 10.0 ms
+Samples above threshold: 40 / 1534 (2.61%)
+-----
+Threshold: 6 ms
+Samples above threshold: 43 / 1534 (2.80%)
+-----
+Threshold: 5 ms
+Samples above threshold: 417 / 1534 (27.18%)
+-----
+#!/usr/bin/env python3
+import sys
+import re
+import statistics
+
+# match lines like:
+# PointerID 182: Δ = 1.1224ms, Polling rate ≈ 890.95 Hz
+rate_re = re.compile(r'Polling rate ≈\s*([\d.]+)\s*Hz')
+
+def main():
+    rates = []
+    for line in sys.stdin:
+        m = rate_re.search(line)
+        if m:
+            rates.append(float(m.group(1)))
+
+    if not rates:
+        print("No samples found on stdin", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Samples: {len(rates)}")
+    print(f"Average rate: {statistics.mean(rates):.2f} Hz")
+    print(f"Min rate:     {min(rates):.2f} Hz")
+    print(f"Max rate:     {max(rates):.2f} Hz")
+    print(f"Median rate:  {statistics.median(rates):.2f} Hz")
+    # only compute stdev if at least 2 samples
+    if len(rates) > 1:
+        print(f"Std dev:      {statistics.stdev(rates):.2f} Hz")
+
+if __name__ == "__main__":
+    main()
+-----
+#!/usr/bin/env python3
+import sys
+import re
+import statistics
+
+# match lines like:
+# PointerID 182: Δ = 1.1224ms, Polling rate ≈ 890.95 Hz
+latency_re = re.compile(r'Δ\s*=\s*([\d.]+)\s*ms')
+
+def main():
+    latencies = []
+    for line in sys.stdin:
+        m = latency_re.search(line)
+        if m:
+            latencies.append(float(m.group(1)))
+
+    if not latencies:
+        print("No latency samples found on stdin", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Samples:          {len(latencies)}")
+    print(f"Average latency:  {statistics.mean(latencies):.4f} ms")
+    print(f"Min latency:      {min(latencies):.4f} ms")
+    print(f"Max latency:      {max(latencies):.4f} ms")
+    print(f"Median latency:   {statistics.median(latencies):.4f} ms")
+    if len(latencies) > 1:
+        print(f"Std dev latency:  {statistics.stdev(latencies):.4f} ms")
+
+if __name__ == "__main__":
+    main()
+-----
+#!/usr/bin/env python3
+import sys
+import re
+
+# match lines like:
+# PointerID 182: Δ = 1.1224ms, Polling rate ≈ 890.95 Hz
+latency_re = re.compile(r'Δ\s*=\s*([\d.]+)\s*ms')
+
+# hardcoded threshold in milliseconds
+THRESHOLD_MS = 10.0
+
+def main():
+    latencies = []
+    for line in sys.stdin:
+        m = latency_re.search(line)
+        if m:
+            latencies.append(float(m.group(1)))
+
+    if not latencies:
+        print("No latency samples found on stdin", file=sys.stderr)
+        sys.exit(1)
+
+    total = len(latencies)
+    above = sum(1 for l in latencies if l > THRESHOLD_MS)
+    percent = above / total * 100
+
+    print(f"Threshold: {THRESHOLD_MS} ms")
+    print(f"Samples above threshold: {above} / {total} ({percent:.2f}%)")
+
+if __name__ == "__main__":
+    main()
