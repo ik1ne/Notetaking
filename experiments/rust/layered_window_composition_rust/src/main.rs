@@ -10,7 +10,6 @@ use webview2_com::{
     CreateCoreWebView2CompositionControllerCompletedHandler,
     CreateCoreWebView2EnvironmentCompletedHandler, CursorChangedEventHandler,
 };
-use winapi::shared::windef::LPPOINT;
 use winapi::shared::windowsx::{GET_X_LPARAM, GET_Y_LPARAM};
 use winapi::um::winuser::{GET_KEYSTATE_WPARAM, GET_WHEEL_DELTA_WPARAM, ScreenToClient};
 use windows::UI::Color;
@@ -33,7 +32,7 @@ use windows::core::{Interface, PCWSTR, w};
 use windows_numerics::{Vector2, Vector3};
 
 thread_local! {
-    static COMPOSITION_CONTROLLER: RefCell<Option<ICoreWebView2CompositionController>> = RefCell::new(None);
+    static COMPOSITION_CONTROLLER: RefCell<Option<ICoreWebView2CompositionController>> = const { RefCell::new(None) };
 }
 
 const MAIN_CLASS_NAME: PCWSTR = w!("MainClass");
@@ -221,18 +220,15 @@ extern "system" fn main_proc(mut hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
         WM_SETCURSOR => unsafe {
             let hit_test = (lparam.0 as u32) & 0xffff;
             if hit_test == HTCLIENT {
-                unsafe {
-                    // Try to get the cursor from WebView
-                    let mut cursor: HCURSOR = std::mem::zeroed();
-                    COMPOSITION_CONTROLLER.with(|cell| {
-                        let Some(ctrl) = &*cell.borrow() else { return };
-                        let mut cursor = HCURSOR::default();
-                        if ctrl.Cursor(&mut cursor as _).is_err() {
-                            println!("Cursor not found");
-                        }
-                        SetCursor(Some(cursor));
-                    });
-                }
+                // Try to get the cursor from WebView
+                COMPOSITION_CONTROLLER.with(|cell| {
+                    let Some(ctrl) = &*cell.borrow() else { return };
+                    let mut cursor = HCURSOR::default();
+                    if ctrl.Cursor(&mut cursor as _).is_err() {
+                        println!("Cursor not found");
+                    }
+                    SetCursor(Some(cursor));
+                });
                 // We handled it
                 return LRESULT(1);
             }
