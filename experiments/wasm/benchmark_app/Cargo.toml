@@ -24,4 +24,6 @@ features = [
 ]
 
 [dependencies]
+anyhow = "1"
+wasmtime = "33"
 windows-numerics = "0.2"

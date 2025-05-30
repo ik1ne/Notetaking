@@ -1,6 +1,6 @@
 #![allow(unused)]
 mod native_renderer;
-// mod wasm_renderer;
+mod wasm_renderer;
 
 use std::{collections::HashMap, time::Instant};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
