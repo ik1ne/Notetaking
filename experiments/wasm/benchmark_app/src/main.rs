@@ -1,5 +1,5 @@
 #![allow(unused)]
-// mod native_renderer;
+mod native_renderer;
 // mod wasm_renderer;
 
 use std::{collections::HashMap, time::Instant};
