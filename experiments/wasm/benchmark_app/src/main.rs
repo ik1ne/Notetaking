@@ -18,7 +18,7 @@ mod native_renderer;
 mod wasm_renderer;
 
 // Configurable constants
-const RUN_ITERATIONS: usize = 1000;
+const RUN_ITERATIONS: usize = 3;
 const TICK_INTERVAL_MS: u64 = 8;
 
 // Wasm linear-memory offsets (bytes)
@@ -47,14 +47,16 @@ unsafe extern "system" fn window_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    unsafe {
-        match msg {
-            WM_DESTROY => {
-                PostQuitMessage(0);
-                LRESULT(0)
-            }
-            _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    match msg {
+        WM_DESTROY => {
+            PostQuitMessage(0);
+            LRESULT(0)
         }
+        WM_SIZE => {
+            // Handle resize if needed
+            LRESULT(0)
+        }
+        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
 }
 
@@ -122,7 +124,7 @@ fn create_window_and_d2d() -> Result<(ID2D1HwndRenderTarget, ID2D1SolidColorBrus
 }
 
 fn main() -> Result<()> {
-    // Parse args: if any arg provided -> native, else wasm
+    // Parse args: if no extra args -> native, else wasm
     let args: Vec<String> = env::args().collect();
     let is_native = args.len() <= 1;
     let wasm_path = if is_native {
@@ -219,12 +221,13 @@ fn main() -> Result<()> {
             // Chunk timing end
             let mut chunk_t2: i64 = 0;
             unsafe { QueryPerformanceCounter(&mut chunk_t2) };
-            let elapsed = (chunk_t2 - chunk_t1) as f64 * 1e3 / freq as f64;
+            let elapsed_ms = (chunk_t2 - chunk_t1) as f64 * 1e3 / freq as f64;
 
             // Sleep if work < 8 ms
-            if elapsed < TICK_INTERVAL_MS as f64 {
-                let to_sleep = (TICK_INTERVAL_MS as f64 - elapsed).max(0.0) / 1000.0;
-                sleep(Duration::from_millis(to_sleep as u64));
+            if elapsed_ms < TICK_INTERVAL_MS as f64 {
+                let to_sleep_ms = (TICK_INTERVAL_MS as f64 - elapsed_ms).max(0.0);
+                // Sleep the precise remaining duration (including fractional ms)
+                sleep(Duration::from_millis(to_sleep_ms as u64));
             }
         }
 
