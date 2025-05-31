@@ -18,7 +18,7 @@ mod native_renderer;
 mod wasm_renderer;
 
 // Configurable constants
-const RUN_ITERATIONS: usize = 3;
+const RUN_ITERATIONS: usize = 1000;
 const TICK_INTERVAL_MS: u64 = 8;
 
 // Wasm linear-memory offsets (bytes)
@@ -194,6 +194,9 @@ fn main() -> Result<()> {
         let mut iter_start: i64 = 0;
         unsafe { QueryPerformanceCounter(&mut iter_start) };
 
+        // Track total sleep time this iter
+        let mut total_sleep_ms: f64 = 0.0;
+
         // Begin stroke
         if is_native {
             native_renderer::begin_stroke();
@@ -221,13 +224,13 @@ fn main() -> Result<()> {
             // Chunk timing end
             let mut chunk_t2: i64 = 0;
             unsafe { QueryPerformanceCounter(&mut chunk_t2) };
-            let elapsed_ms = (chunk_t2 - chunk_t1) as f64 * 1e3 / freq as f64;
+            let elapsed = (chunk_t2 - chunk_t1) as f64 * 1e3 / freq as f64;
 
-            // Sleep if work < 8 ms
-            if elapsed_ms < TICK_INTERVAL_MS as f64 {
-                let to_sleep_ms = (TICK_INTERVAL_MS as f64 - elapsed_ms).max(0.0);
-                // Sleep the precise remaining duration (including fractional ms)
-                sleep(Duration::from_millis(to_sleep_ms as u64));
+            // Sleep if work < 8 ms, and accumulate
+            if elapsed < TICK_INTERVAL_MS as f64 {
+                let to_sleep_ms = (TICK_INTERVAL_MS as f64 - elapsed).max(0.0);
+                total_sleep_ms += to_sleep_ms;
+                sleep(Duration::from_secs_f64(to_sleep_ms / 1000.0));
             }
         }
 
@@ -245,8 +248,9 @@ fn main() -> Result<()> {
         // Record iteration end
         let mut iter_end: i64 = 0;
         unsafe { QueryPerformanceCounter(&mut iter_end) };
-        let delta = (iter_end - iter_start) as f64 * 1e3 / freq as f64;
-        latencies.push(delta);
+        let raw_duration = (iter_end - iter_start) as f64 * 1e3 / freq as f64;
+        let effective_duration = raw_duration - total_sleep_ms;
+        latencies.push(effective_duration);
     }
 
     // Compute statistics
