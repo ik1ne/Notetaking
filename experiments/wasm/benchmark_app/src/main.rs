@@ -18,7 +18,7 @@ mod native_renderer;
 mod wasm_renderer;
 
 // Configurable constants
-const RUN_ITERATIONS: usize = 3;
+const RUN_ITERATIONS: usize = 1000;
 const TICK_INTERVAL_MS: u64 = 8;
 
 // Wasm linear-memory offsets (bytes)
@@ -223,7 +223,7 @@ fn main() -> Result<()> {
 
             // Sleep if work < 8 ms
             if elapsed < TICK_INTERVAL_MS as f64 {
-                let to_sleep = (TICK_INTERVAL_MS as f64 - elapsed).max(0.0);
+                let to_sleep = (TICK_INTERVAL_MS as f64 - elapsed).max(0.0) / 1000.0;
                 sleep(Duration::from_millis(to_sleep as u64));
             }
         }
