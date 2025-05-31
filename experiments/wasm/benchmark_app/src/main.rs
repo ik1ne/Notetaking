@@ -129,7 +129,7 @@ fn main() -> Result<()> {
         PathBuf::new()
     } else {
         PathBuf::from(
-            r#"C:\Users\ik1ne\Sources\Notetaking\experiments\wasm\stroke_renderer\target\wasm32-unknown-unknown\release\stroke_renderer.wasm"#,
+            r"C:\Users\ik1ne\Sources\Notetaking\experiments\wasm\stroke_renderer\target\wasm32-unknown-unknown\release\stroke_renderer.wasm",
         )
     };
 
@@ -147,9 +147,10 @@ fn main() -> Result<()> {
     let mut circle_path: Vec<Point> = Vec::new();
     for degree in 0..360 {
         let theta = degree as f32 * std::f32::consts::PI / 180.0;
-        let x = theta.cos() * SCALE + OFFSET_X;
-        let y = theta.sin() * SCALE + OFFSET_Y;
-        circle_path.push(Point { x, y });
+        circle_path.push(Point {
+            x: theta.cos() * SCALE + OFFSET_X,
+            y: theta.sin() * SCALE + OFFSET_Y,
+        });
     }
     // Split into 2-point chunks
     let mut chunks: Vec<[Point; 2]> = Vec::new();
@@ -175,64 +176,73 @@ fn main() -> Result<()> {
 
     // Main benchmark loop
     for _ in 0..RUN_ITERATIONS {
+        // Pump Windows messages
         let mut msg = MSG::default();
         unsafe {
             while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+                if msg.message == WM_QUIT {
+                    break;
+                }
                 TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
         }
-        // Throttle to 8ms
-        sleep(Duration::from_millis(TICK_INTERVAL_MS));
 
-        // Record t1
-        let mut start: i64 = 0;
-        unsafe { QueryPerformanceCounter(&mut start) };
+        // Record iteration start
+        let mut iter_start: i64 = 0;
+        unsafe { QueryPerformanceCounter(&mut iter_start) };
 
-        let renderer = &mut wasm_renderer;
-        let mut idx = 0;
-        // Draw full circle one chunk at a time
-        // begin stroke
+        // Begin stroke
         if is_native {
             native_renderer::begin_stroke();
-        } else if let Some(wr) = renderer.as_mut() {
+        } else if let Some(wr) = wasm_renderer.as_mut() {
             wr.begin_stroke()?;
         }
 
-        while idx < chunks.len() {
-            let pts = &chunks[idx];
+        // Draw each chunk, throttled to ≥ 8 ms
+        for chunk in &chunks {
+            // Chunk timing start
+            let mut chunk_t1: i64 = 0;
+            unsafe { QueryPerformanceCounter(&mut chunk_t1) };
+
+            // Append & render chunk
             if is_native {
-                native_renderer::append_points(pts);
-            } else if let Some(wr) = renderer.as_mut() {
-                wr.append_points(pts, WASM_POINT_BUFFER_OFFSET)?;
-            }
-            // pull and render
-            if is_native {
+                native_renderer::append_points(chunk);
                 let cmds = native_renderer::pull_draw_delta(MAX_COMMANDS_PER_BATCH as usize);
                 native_renderer::render_commands(&rt, &brush, &cmds);
-            } else if let Some(wr) = renderer.as_mut() {
+            } else if let Some(wr) = wasm_renderer.as_mut() {
+                wr.append_points(chunk, WASM_POINT_BUFFER_OFFSET)?;
                 let cmds = wr.pull_draw_delta(MAX_COMMANDS_PER_BATCH, WASM_CMD_BUFFER_OFFSET)?;
                 wr.render_commands(&rt, &brush, &cmds);
             }
-            idx += 1;
-            sleep(Duration::from_millis(TICK_INTERVAL_MS));
+
+            // Chunk timing end
+            let mut chunk_t2: i64 = 0;
+            unsafe { QueryPerformanceCounter(&mut chunk_t2) };
+            let elapsed = (chunk_t2 - chunk_t1) as f64 * 1e3 / freq as f64;
+
+            // Sleep if work < 8 ms
+            if elapsed < TICK_INTERVAL_MS as f64 {
+                let to_sleep = (TICK_INTERVAL_MS as f64 - elapsed).max(0.0);
+                sleep(Duration::from_millis(to_sleep as u64));
+            }
         }
 
-        // Delete and render erase
+        // Delete stroke and render erase
         if is_native {
             native_renderer::delete_stroke();
             let cmds = native_renderer::pull_draw_delta(MAX_COMMANDS_PER_BATCH as usize);
             native_renderer::render_commands(&rt, &brush, &cmds);
-        } else if let Some(wr) = renderer.as_mut() {
+        } else if let Some(wr) = wasm_renderer.as_mut() {
             wr.delete_stroke()?;
             let cmds = wr.pull_draw_delta(MAX_COMMANDS_PER_BATCH, WASM_CMD_BUFFER_OFFSET)?;
             wr.render_commands(&rt, &brush, &cmds);
         }
 
-        // Record t2
-        let mut end: i64 = 0;
-        unsafe { QueryPerformanceCounter(&mut end) };
-        let delta = (end - start) as f64 * 1e3 / freq as f64;
+        // Record iteration end
+        let mut iter_end: i64 = 0;
+        unsafe { QueryPerformanceCounter(&mut iter_end) };
+        let delta = (iter_end - iter_start) as f64 * 1e3 / freq as f64;
         latencies.push(delta);
     }
 
