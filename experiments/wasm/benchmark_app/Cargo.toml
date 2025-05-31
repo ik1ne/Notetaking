@@ -17,9 +17,11 @@ features = [
     "Win32_System_LibraryLoader",
     "Win32_System_WinRT_Composition",
     "Win32_UI",
+    "Win32_UI_Controls",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Input_Pointer",
     "Win32_System_LibraryLoader",
+    "Win32_System_Performance",
     "Win32_System_WinRT_Composition",
 ]
 

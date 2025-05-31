@@ -1,15 +1,8 @@
+use crate::Point;
 use std::path::Path;
 use wasmtime::{Caller, Engine, Linker, Memory, Module, Store, TypedFunc};
 use windows::Win32::Graphics::Direct2D::{ID2D1HwndRenderTarget, ID2D1SolidColorBrush};
 use windows_numerics::Vector2;
-
-/// A 2D point for rendering (copy of host's Point)
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct Point {
-    pub x: f32,
-    pub y: f32,
-}
 
 /// Draw command struct as returned by WASM
 #[repr(C)]

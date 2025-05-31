@@ -1,16 +1,9 @@
+use crate::Point;
 use std::collections::{HashMap, VecDeque};
 use std::ops::DerefMut;
 use std::sync::{LazyLock, Mutex};
 use windows::Win32::Graphics::Direct2D::{ID2D1HwndRenderTarget, ID2D1SolidColorBrush};
 use windows_numerics::Vector2;
-
-/// A 2D point for rendering
-#[repr(C)]
-#[derive(Copy, Clone, Debug)]
-pub struct Point {
-    pub x: f32,
-    pub y: f32,
-}
 
 /// A draw command (line segment)
 #[repr(C)]
@@ -70,7 +63,7 @@ pub fn begin_stroke() {
 /// Append a batch of points (one stroke at a time)
 pub fn append_points(points: &[Point]) {
     let mut canvas = CANVAS.lock().unwrap();
-    let mut canvas = canvas.deref_mut();
+    let canvas = canvas.deref_mut();
     if let Some((&id, _)) = canvas.strokes.iter().max_by_key(|(id, _)| **id) {
         let stroke = canvas.strokes.get_mut(&id).unwrap();
         for w in points.windows(2) {
