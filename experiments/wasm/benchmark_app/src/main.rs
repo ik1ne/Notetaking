@@ -18,7 +18,7 @@ mod native_renderer;
 mod wasm_renderer;
 
 // Configurable constants
-const RUN_ITERATIONS: usize = 1_000;
+const RUN_ITERATIONS: usize = 3;
 const TICK_INTERVAL_MS: u64 = 8;
 
 // Wasm linear-memory offsets (bytes)
@@ -128,7 +128,9 @@ fn main() -> Result<()> {
     let wasm_path = if is_native {
         PathBuf::new()
     } else {
-        Path::new(&args[1]).to_path_buf()
+        PathBuf::from(
+            r#"C:\Users\ik1ne\Sources\Notetaking\experiments\wasm\stroke_renderer\target\wasm32-unknown-unknown\release\stroke_renderer.wasm"#,
+        )
     };
 
     // Create window & D2D render target
@@ -173,6 +175,13 @@ fn main() -> Result<()> {
 
     // Main benchmark loop
     for _ in 0..RUN_ITERATIONS {
+        let mut msg = MSG::default();
+        unsafe {
+            while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+        }
         // Throttle to 8ms
         sleep(Duration::from_millis(TICK_INTERVAL_MS));
 
@@ -239,6 +248,7 @@ fn main() -> Result<()> {
     let max = latencies[count - 1];
 
     // Print results
+    println!("mode: {}", if is_native { "native" } else { "wasm" });
     println!("iterations: {}", count);
     println!("mean:      {:.3} ms", mean);
     println!("median:    {:.3} ms", median);
