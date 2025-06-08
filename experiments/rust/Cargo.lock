@@ -84,8 +84,7 @@ checksum = "5a5f39404a5da50712a4c1eecf25e90dd62b613502b7e925fd4e4d19b5c96512"
 [[package]]
 name = "webview2-com"
 version = "0.37.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b542b5cfbd9618c46c2784e4d41ba218c336ac70d44c55e47b251033e7d85601"
+source = "git+https://github.com/ik1ne/webview2-rs?branch=personal#012e77b42cfcc6947e57fc16dfc59f5618e73ee7"
 dependencies = [
  "webview2-com-macros",
  "webview2-com-sys",
