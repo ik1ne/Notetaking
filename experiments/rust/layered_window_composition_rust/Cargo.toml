@@ -23,4 +23,4 @@ features = [
 anyhow = "1"
 windows-numerics = "0.2"
 winapi = { version = "0.3", features = ["windowsx", "winuser", "windef"] }
-webview2-com = { git = "https://github.com/ik1ne/webview2-rs", branch = "personal" }
+webview2-com = "0.38.0"
